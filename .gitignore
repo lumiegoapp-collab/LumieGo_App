@@ -1,0 +1,14 @@
+# Xcode build & user data
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+.DS_Store
+# SwiftPM / CocoaPods (not used here, but safe)
+.build/
+Pods/

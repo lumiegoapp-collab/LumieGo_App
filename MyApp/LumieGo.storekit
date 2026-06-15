@@ -1,0 +1,65 @@
+{
+  "identifier" : "A1B2C3D4",
+  "nonRenewingSubscriptions" : [],
+  "products" : [],
+  "settings" : {
+    "_compatibilityTimeRate" : {
+      "real" : 1
+    }
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "20000001",
+      "localizations" : [],
+      "name" : "LumieGo Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "19.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "PRO6MO0001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "All LumieGo features. Billed every 6 months. Cancel anytime.",
+              "displayName" : "LumieGo Pro - 6 Months",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "app.lumiego.ios.pro.6mo",
+          "recurringSubscriptionPeriod" : "P6M",
+          "referenceName" : "LumieGo Pro 6-Month",
+          "subscriptionGroupID" : "20000001",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "4.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "PROMO0001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "All LumieGo features. Billed monthly. Cancel anytime.",
+              "displayName" : "LumieGo Pro - Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "app.lumiego.ios.pro.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "LumieGo Pro Monthly",
+          "subscriptionGroupID" : "20000001",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}
