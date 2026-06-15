@@ -7,26 +7,26 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		000000000000000000000120 /* MyApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		000000000000000000000120 /* LumieGo_App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LumieGo_App.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		5300863E2FD9231C0032C8BD /* Exceptions for "MyApp" folder in "MyApp" target */ = {
+		5300863E2FD9231C0032C8BD /* Exceptions for "LumieGo_App" folder in "LumieGo_App" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 			);
-			target = 000000000000000100000000 /* MyApp */;
+			target = 000000000000000100000000 /* LumieGo_App */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		000000000000000000000010 /* MyApp */ = {
+		000000000000000000000010 /* LumieGo_App */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				5300863E2FD9231C0032C8BD /* Exceptions for "MyApp" folder in "MyApp" target */,
+				5300863E2FD9231C0032C8BD /* Exceptions for "LumieGo_App" folder in "LumieGo_App" target */,
 			);
-			path = MyApp;
+			path = LumieGo_App;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -43,7 +43,7 @@
 		000000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
-				000000000000000000000010 /* MyApp */,
+				000000000000000000000010 /* LumieGo_App */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -51,7 +51,7 @@
 		000000000000000000000020 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				000000000000000000000120 /* MyApp.app */,
+				000000000000000000000120 /* LumieGo_App.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -59,9 +59,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		000000000000000100000000 /* MyApp */ = {
+		000000000000000100000000 /* LumieGo_App */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 000000000000000110000000 /* Build configuration list for PBXNativeTarget "MyApp" */;
+			buildConfigurationList = 000000000000000110000000 /* Build configuration list for PBXNativeTarget "LumieGo_App" */;
 			buildPhases = (
 				000000000000000120000000 /* Sources */,
 				000000000000000130000000 /* Frameworks */,
@@ -70,11 +70,11 @@
 			buildRules = (
 			);
 			fileSystemSynchronizedGroups = (
-				000000000000000000000010 /* MyApp */,
+				000000000000000000000010 /* LumieGo_App */,
 			);
-			name = MyApp;
+			name = LumieGo_App;
 			productName = MyApp;
-			productReference = 000000000000000000000120 /* MyApp.app */;
+			productReference = 000000000000000000000120 /* LumieGo_App.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -92,7 +92,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 000000000000000010000000 /* Build configuration list for PBXProject "Untitled Project" */;
+			buildConfigurationList = 000000000000000010000000 /* Build configuration list for PBXProject "LumieGo_App" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -106,7 +106,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				000000000000000100000000 /* MyApp */,
+				000000000000000100000000 /* LumieGo_App */,
 			);
 		};
 /* End PBXProject section */
@@ -128,7 +128,7 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		000000000000000011000000 /* Debug configuration for PBXProject "Untitled Project" */ = {
+		000000000000000011000000 /* Debug configuration for PBXProject "LumieGo_App" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -198,7 +198,7 @@
 			};
 			name = Debug;
 		};
-		000000000000000012000000 /* Release configuration for PBXProject "Untitled Project" */ = {
+		000000000000000012000000 /* Release configuration for PBXProject "LumieGo_App" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -260,11 +260,11 @@
 			};
 			name = Release;
 		};
-		000000000000000111000000 /* Debug configuration for PBXNativeTarget "MyApp" */ = {
+		000000000000000111000000 /* Debug configuration for PBXNativeTarget "LumieGo_App" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = MyApp/MyApp.entitlements;
+				CODE_SIGN_ENTITLEMENTS = LumieGo_App/MyApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 95V794K877;
@@ -272,7 +272,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = MyApp/Info.plist;
+				INFOPLIST_FILE = LumieGo_App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = LumieGo;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -309,11 +309,11 @@
 			};
 			name = Debug;
 		};
-		000000000000000112000000 /* Release configuration for PBXNativeTarget "MyApp" */ = {
+		000000000000000112000000 /* Release configuration for PBXNativeTarget "LumieGo_App" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = MyApp/MyApp.entitlements;
+				CODE_SIGN_ENTITLEMENTS = LumieGo_App/MyApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 95V794K877;
@@ -321,7 +321,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = MyApp/Info.plist;
+				INFOPLIST_FILE = LumieGo_App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = LumieGo;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -361,19 +361,19 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		000000000000000010000000 /* Build configuration list for PBXProject "Untitled Project" */ = {
+		000000000000000010000000 /* Build configuration list for PBXProject "LumieGo_App" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				000000000000000011000000 /* Debug configuration for PBXProject "Untitled Project" */,
-				000000000000000012000000 /* Release configuration for PBXProject "Untitled Project" */,
+				000000000000000011000000 /* Debug configuration for PBXProject "LumieGo_App" */,
+				000000000000000012000000 /* Release configuration for PBXProject "LumieGo_App" */,
 			);
 			defaultConfigurationName = Release;
 		};
-		000000000000000110000000 /* Build configuration list for PBXNativeTarget "MyApp" */ = {
+		000000000000000110000000 /* Build configuration list for PBXNativeTarget "LumieGo_App" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				000000000000000111000000 /* Debug configuration for PBXNativeTarget "MyApp" */,
-				000000000000000112000000 /* Release configuration for PBXNativeTarget "MyApp" */,
+				000000000000000111000000 /* Debug configuration for PBXNativeTarget "LumieGo_App" */,
+				000000000000000112000000 /* Release configuration for PBXNativeTarget "LumieGo_App" */,
 			);
 			defaultConfigurationName = Release;
 		};
