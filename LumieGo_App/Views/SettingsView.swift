@@ -4,11 +4,13 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @ObservedObject var camera: CameraManager
     @ObservedObject var auth: AuthManager
+    @ObservedObject var trial: TrialManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var showDeleteConfirm = false
     @State private var isDeleting = false
     @State private var showFolderPicker = false
+    @State private var showPaywall = false
 
     private let privacyURL = URL(string: "https://lumiegoapp-collab.github.io/LumieGo/privacy.html")!
     private let termsURL   = URL(string: "https://lumiegoapp-collab.github.io/LumieGo/terms.html")!
@@ -17,6 +19,33 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                // MARK: Subscription
+                Section {
+                    Button {
+                        showPaywall = true
+                    } label: {
+                        HStack {
+                            Label(trial.isPro ? "LumieGo Pro" : "Upgrade to LumieGo Pro",
+                                  systemImage: "crown.fill")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            if trial.isPro {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.green)
+                            } else {
+                                Text(trial.trialLabel)
+                                    .font(.subheadline)
+                                    .foregroundColor(.orange)
+                            }
+                        }
+                    }
+                } header: { SectionHeader("Subscription") } footer: {
+                    Text(trial.isPro
+                         ? "You have full access to all LumieGo Pro features. Manage your subscription in your Apple ID settings."
+                         : "Unlock dual camera, teleprompter, 4K recording, and unlimited length.")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                }
+
                 // MARK: Account
                 Section {
                     if !auth.displayName.isEmpty {
@@ -51,14 +80,8 @@ struct SettingsView: View {
                     PickerRow(label: "Format", systemImage: "film", selection: $camera.videoFormat)
                     PickerRow(label: "Quality", systemImage: "4k.tv", selection: $camera.videoQuality)
                     frameRateRow()
-                } header: { SectionHeader("Video") }
-
-                // MARK: Capture
-                Section {
-                    PickerRow(label: "Layout", systemImage: "rectangle.3.group", selection: $camera.pipMode)
-                    PickerRow(label: "Orientation", systemImage: "rotate.right", selection: $camera.recordingOrientation)
                     ToggleRow(label: "Stabilization", systemImage: "wand.and.stars", isOn: $camera.isStabilizationEnabled)
-                } header: { SectionHeader("Capture") }
+                } header: { SectionHeader("Video") }
 
                 // MARK: Saving
                 Section {
@@ -100,7 +123,6 @@ struct SettingsView: View {
 
                 // MARK: Info
                 Section {
-                    InfoRow(label: "Multi-Cam", value: camera.isMultiCamSupported ? "Supported" : "Not supported (using single cam)")
                     InfoRow(label: "Recordings", value: "\(camera.savedRecordings.count) saved")
                 } header: { SectionHeader("Device") }
 
@@ -121,7 +143,6 @@ struct SettingsView: View {
                 Section {
                     InfoRow(label: "App",     value: "LumieGo")
                     InfoRow(label: "Version", value: "1.0")
-                    InfoRow(label: "Built for", value: "Content Creators")
                     InfoRow(label: "Powered by", value: "Novamint Labs")
                 } header: { SectionHeader("About") }
             }
@@ -154,6 +175,9 @@ struct SettingsView: View {
             .sheet(isPresented: $showFolderPicker) {
                 FolderPicker { url in camera.setExternalFolder(url) }
                     .ignoresSafeArea()
+            }
+            .sheet(isPresented: $showPaywall) {
+                PaywallSheet(trial: trial, isPresented: $showPaywall)
             }
         }
     }

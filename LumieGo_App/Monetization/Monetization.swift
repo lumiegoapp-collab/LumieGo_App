@@ -147,9 +147,25 @@ final class StoreManager: ObservableObject {
     }
 
     /// Returns true if a prior purchase was found and restored.
+    /// Checks local cached entitlements first (silent). In release builds, falls
+    /// back to an explicit `AppStore.sync()` if nothing is cached (covers the
+    /// "new device" case). Debug builds skip the sync to keep simulator testing
+    /// fast and dialog-free.
     func restore() async -> Bool {
+        isPurchasing = true
+        defer { isPurchasing = false }
+        message = nil
+
+        // Fast path: check cached entitlements without prompting.
+        await refreshEntitlements()
+        if isPro { return true }
+
+        #if !DEBUG
+        // Production fallback: force a server sync (may prompt for App Store auth).
         do { try await AppStore.sync() } catch { /* user may cancel; fall through */ }
         await refreshEntitlements()
+        #endif
+
         if !isPro { message = "No previous purchase found to restore." }
         return isPro
     }
@@ -207,16 +223,21 @@ struct PaywallView: View {
                 .ignoresSafeArea()
 
             VStack(spacing: 0) {
-                Spacer(minLength: 24)
+                Spacer(minLength: 90)   // clear the sheet drag handle AND the close button
 
-                VStack(spacing: 8) {
-                    Image(systemName: "camera.aperture")
-                        .font(.system(size: 46))
-                        .foregroundStyle(.orange)
+                VStack(spacing: 10) {
+                    Image("LogoMark")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 76, height: 76)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .shadow(color: .orange.opacity(0.35), radius: 12)
                     Text("LumieGo Pro")
                         .font(.system(size: 30, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
-                    Text("Your 3-day free trial has ended.\nSubscribe to keep creating.")
+                    Text(trial.isLocked
+                         ? "Your 3-day free trial has ended.\nSubscribe to keep creating."
+                         : "Unlock every LumieGo feature.\nCancel anytime.")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.7))
                         .multilineTextAlignment(.center)
@@ -298,10 +319,19 @@ struct PaywallView: View {
 
                     if let msg = store.message {
                         Text(msg)
-                            .font(.system(size: 12))
-                            .foregroundColor(.orange.opacity(0.9))
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.white)
                             .multilineTextAlignment(.center)
-                            .padding(.top, 4)
+                            .padding(.horizontal, 14).padding(.vertical, 10)
+                            .frame(maxWidth: .infinity)
+                            .background(Color.orange.opacity(0.22),
+                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color.orange.opacity(0.6), lineWidth: 1)
+                            )
+                            .padding(.top, 6)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
 
                     #if DEBUG
@@ -320,7 +350,7 @@ struct PaywallView: View {
                 .padding(.bottom, 30)
             }
         }
-        .interactiveDismissDisabled(true)   // can't swipe past the paywall on day 4
+        .interactiveDismissDisabled(trial.isLocked)   // only block dismissal on the forced post-trial lock screen
         .task { await store.refreshEntitlements() }
         .onChange(of: store.isPro) { _, pro in
             if pro { trial.markPro() }   // already-purchased users unlock automatically
@@ -365,4 +395,39 @@ struct PaywallView: View {
 
 #Preview("Paywall") {
     PaywallView(trial: TrialManager(), hideDebugControls: true)
+}
+
+// MARK: - Paywall Sheet (dismissible wrapper)
+
+/// PaywallView shown as a user-dismissible sheet. Used when the paywall is
+/// opened manually (Settings, trial badge tap) rather than the forced
+/// post-trial lock screen. Adds a close button and hides debug controls.
+struct PaywallSheet: View {
+    @ObservedObject var trial: TrialManager
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            PaywallView(trial: trial, hideDebugControls: true)
+
+            // Always-visible close button. xmark.circle.fill renders as a high-contrast
+            // filled glyph so it stays legible over the dark gradient. Positioned with
+            // enough top inset to clear the sheet's drag handle on iPad form sheets.
+            Button {
+                isPresented = false
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .black.opacity(0.55))
+                    .font(.system(size: 32, weight: .bold))
+            }
+            .padding(.top, 20)
+            .padding(.trailing, 18)
+            .accessibilityLabel("Close")
+            .zIndex(10)
+        }
+        .onChange(of: trial.isPro) { _, pro in
+            if pro { isPresented = false }   // auto-dismiss after a successful purchase
+        }
+    }
 }

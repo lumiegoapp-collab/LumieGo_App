@@ -17,6 +17,7 @@
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "000000000000000100000000"
                BuildableName = "LumieGo_App.app"
+               BlueprintName = "LumieGo_App"
                ReferencedContainer = "container:LumieGo_App.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -46,9 +47,13 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "000000000000000100000000"
             BuildableName = "LumieGo_App.app"
+            BlueprintName = "LumieGo_App"
             ReferencedContainer = "container:LumieGo_App.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <StoreKitConfigurationFileReference
+         identifier = "../../LumieGo_App/LumieGo.storekit">
+      </StoreKitConfigurationFileReference>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
@@ -62,6 +67,7 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "000000000000000100000000"
             BuildableName = "LumieGo_App.app"
+            BlueprintName = "LumieGo_App"
             ReferencedContainer = "container:LumieGo_App.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

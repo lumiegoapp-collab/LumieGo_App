@@ -67,6 +67,7 @@ struct MainCameraView: View {
     @State private var showSettings     = false
     @State private var showRecordings   = false
     @State private var showScriptEditor = false
+    @State private var showPaywall      = false
     @State private var showFocus        = false
     @State private var focusPoint       = CGPoint.zero
     @State private var exposureEV: Float = 0
@@ -182,7 +183,8 @@ struct MainCameraView: View {
                                 LandscapeTopBar(camera: camera, teleprompter: teleprompter,
                                                 trial: trial,
                                                 showSettings: $showSettings,
-                                                showRecordings: $showRecordings)
+                                                showRecordings: $showRecordings,
+                                                showPaywall: $showPaywall)
                                     .padding(.leading, 50)
                                     .padding(.top, 18)
                                 Spacer()
@@ -199,7 +201,8 @@ struct MainCameraView: View {
                         // Hide the camera top bar while the teleprompter band occupies the top
                         if !teleprompter.isEnabled {
                             TopBar(camera: camera, teleprompter: teleprompter, trial: trial,
-                                   showSettings: $showSettings, showRecordings: $showRecordings)
+                                   showSettings: $showSettings, showRecordings: $showRecordings,
+                                   showPaywall: $showPaywall)
                         }
                         Spacer()
                         BottomBar(camera: camera, teleprompter: teleprompter,
@@ -242,9 +245,10 @@ struct MainCameraView: View {
             }
         }
         .ignoresSafeArea()
-        .sheet(isPresented: $showSettings)     { SettingsView(camera: camera, auth: auth) }
+        .sheet(isPresented: $showSettings)     { SettingsView(camera: camera, auth: auth, trial: trial) }
         .sheet(isPresented: $showRecordings)   { RecordingsView(camera: camera) }
         .sheet(isPresented: $showScriptEditor) { ScriptEditorView(teleprompter: teleprompter) }
+        .sheet(isPresented: $showPaywall)      { PaywallSheet(trial: trial, isPresented: $showPaywall) }
         .sheet(item: Binding(
             get: { shareURL.map { ShareWrapper(url: $0) } },
             set: { shareURL = $0?.url }
@@ -346,6 +350,7 @@ struct TopBar: View {
     @ObservedObject var trial: TrialManager
     @Binding var showSettings:   Bool
     @Binding var showRecordings: Bool
+    @Binding var showPaywall:    Bool
 
     var body: some View {
         HStack(spacing: 6) {
@@ -381,20 +386,24 @@ struct TopBar: View {
 
             Spacer()
 
-            // Center: trial badge (the timer lives in the recording HUD)
+            // Center: trial badge - tap to open the paywall (timer lives in the recording HUD)
             if !camera.isRecording, !trial.isPro {
-                HStack(spacing: 4) {
-                    Image(systemName: "clock").font(.system(size: 10, weight: .semibold))
-                    Text(trial.trialLabel).font(.system(size: 11, weight: .semibold))
+                Button {
+                    showPaywall = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock").font(.system(size: 10, weight: .semibold))
+                        Text(trial.trialLabel).font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundColor(.orange)
+                    .fixedSize()
+                    .padding(.horizontal, 9).padding(.vertical, 6)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(Color.orange.opacity(0.35), lineWidth: 1))
                 }
-                .foregroundColor(.orange)
-                .fixedSize()
-                .padding(.horizontal, 9).padding(.vertical, 6)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().stroke(Color.orange.opacity(0.35), lineWidth: 1))
                 .onLongPressGesture {
                     #if DEBUG
-                    trial.debugExpireTrial()   // long-press to preview the paywall in debug builds
+                    trial.debugExpireTrial()   // long-press to preview the locked paywall in debug builds
                     #endif
                 }
             }
@@ -1013,6 +1022,7 @@ struct LandscapeTopBar: View {
     @ObservedObject var trial: TrialManager
     @Binding var showSettings:   Bool
     @Binding var showRecordings: Bool
+    @Binding var showPaywall:    Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1046,15 +1056,19 @@ struct LandscapeTopBar: View {
             ControlButton(icon: "gearshape")       { showSettings   = true }
 
             if !trial.isPro {
-                HStack(spacing: 4) {
-                    Image(systemName: "clock").font(.system(size: 10, weight: .semibold))
-                    Text(trial.trialLabel).font(.system(size: 11, weight: .semibold))
+                Button {
+                    showPaywall = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock").font(.system(size: 10, weight: .semibold))
+                        Text(trial.trialLabel).font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundColor(.orange)
+                    .fixedSize()
+                    .padding(.horizontal, 9).padding(.vertical, 5)
+                    .background(Color.orange.opacity(0.15))
+                    .clipShape(Capsule())
                 }
-                .foregroundColor(.orange)
-                .fixedSize()
-                .padding(.horizontal, 9).padding(.vertical, 5)
-                .background(Color.orange.opacity(0.15))
-                .clipShape(Capsule())
             }
         }
         .padding(.horizontal, 10)
