@@ -248,7 +248,7 @@ struct LoginView: View {
                     featureRow("person.2.fill", "Film front + back together - like a two-person crew")
                     featureRow("text.alignleft", "Built-in teleprompter - read while you record")
                     featureRow("square.grid.2x2", "Reels, TikTok & YouTube-ready with safe-zone guides")
-                    featureRow("sparkles", "3 days free, then from $4.99/month")
+                    featureRow("sparkles", "Start free — subscribe to keep creating")
                 }
                 .padding(.horizontal, 36)
                 .padding(.bottom, 34)
