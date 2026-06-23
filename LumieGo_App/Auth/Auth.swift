@@ -135,6 +135,11 @@ struct SupabaseService {
     /// Save the signed-up user. Uses a plain insert (the public key has no SELECT policy,
     /// so an `on_conflict` upsert - which must read existing rows - is rejected by RLS).
     /// A duplicate (409) just means the user is already saved, which we treat as success.
+    ///
+    /// `return=minimal` is intentional: the anon key has no SELECT policy, so asking
+    /// PostgREST to read the row back (return=representation) would fail with a misleading
+    /// 401 even when the insert itself succeeded. With return=minimal the insert commits
+    /// and we get a clean 201, which is the real signal of success.
     @discardableResult
     func upsertUser(id: String, name: String, email: String) async -> String {
         guard isConfigured, let url = URL(string: "\(baseURL)/rest/v1/\(table)") else {

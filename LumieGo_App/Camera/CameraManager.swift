@@ -1059,7 +1059,7 @@ final class CameraManager: NSObject, ObservableObject {
         savedRecordings.removeAll { $0.id == item.id }
     }
 
-    // MARK: - Photo (triple-shot)
+    // MARK: - Photo capture
 
     /// Requests a still capture on the next synchronized frame set.
     /// Set on the capture queue (where it's read) to avoid a cross-thread data race.
@@ -1067,18 +1067,26 @@ final class CameraManager: NSObject, ObservableObject {
         syncQueue.async { self.stillRequested = true }
     }
 
-    /// Renders and saves the merged (graded), back, and front stills to Photos.
-    private func captureTripleShot(back: CVPixelBuffer, front: CVPixelBuffer?) {
+    /// Renders and saves a still that mirrors the currently active video layout:
+    /// - .back / .front / PiP / side-by-side / top-bottom -> one composite photo
+    ///   matching the live preview (same path the video writer uses).
+    /// - .dual -> two photos (portrait 9:16 and landscape 16:9), the same pair
+    ///   the dual video mode produces as two separate clips.
+    private func captureLayoutPhoto(back: CVPixelBuffer, front: CVPixelBuffer?) {
         var images: [UIImage] = []
-        if let merged = compositeFrames(back: back, front: front), let img = uiImage(from: merged) {
+
+        if pipMode == .dual {
+            if let p = renderBackToSize(back, size: portraitSize), let img = uiImage(from: p) {
+                images.append(img)
+            }
+            if let l = renderBackToSize(back, size: landscapeSize), let img = uiImage(from: l) {
+                images.append(img)
+            }
+        } else if let merged = compositeFrames(back: back, front: front),
+                  let img = uiImage(from: merged) {
             images.append(img)
         }
-        if let b = renderSingleCamera(back, isFront: false), let img = uiImage(from: b) {
-            images.append(img)
-        }
-        if let front, let f = renderSingleCamera(front, isFront: true), let img = uiImage(from: f) {
-            images.append(img)
-        }
+
         guard !images.isEmpty else { return }
 
         let first = images.first
@@ -1151,7 +1159,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate,
 
         if stillRequested {
             stillRequested = false
-            captureTripleShot(back: backBuf, front: frontBuf)
+            captureLayoutPhoto(back: backBuf, front: frontBuf)
         }
 
         guard isWriting else { return }
