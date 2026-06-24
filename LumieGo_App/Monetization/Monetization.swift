@@ -1,12 +1,70 @@
 import SwiftUI
 import Combine
 import StoreKit
+import Security   // Keychain APIs
+
+// MARK: - Trial Keychain
+
+/// Persists the trial start date in the Keychain so it survives app uninstalls.
+/// iOS preserves Keychain entries across reinstalls unless the user signs out of
+/// iCloud or wipes the device. Without this, a determined user could uninstall
+/// and reinstall to reset the 3-day free trial forever.
+private enum TrialKeychain {
+    static let service = "app.lumiego.ios"
+    static let account = "trial.firstLaunchDate"
+
+    static func load() -> Date? {
+        let query: [String: Any] = [
+            kSecClass as String:       kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String:  true,
+            kSecMatchLimit as String:  kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let s = String(data: data, encoding: .utf8),
+              let interval = TimeInterval(s) else { return nil }
+        return Date(timeIntervalSince1970: interval)
+    }
+
+    @discardableResult
+    static func save(_ date: Date) -> Bool {
+        let data = String(date.timeIntervalSince1970).data(using: .utf8) ?? Data()
+
+        let baseQuery: [String: Any] = [
+            kSecClass as String:       kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        let updateAttrs: [String: Any] = [
+            kSecValueData as String:      data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+        ]
+
+        // Try to update an existing entry first.
+        let updateStatus = SecItemUpdate(baseQuery as CFDictionary,
+                                         updateAttrs as CFDictionary)
+        if updateStatus == errSecSuccess { return true }
+
+        // Nothing to update - insert a new entry.
+        var insertQuery = baseQuery
+        insertQuery[kSecValueData as String]      = data
+        insertQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let addStatus = SecItemAdd(insertQuery as CFDictionary, nil)
+        return addStatus == errSecSuccess
+    }
+}
 
 // MARK: - Trial Manager
 
 /// Drives the "3 days free, paywall on day 4" model.
-/// Records the first-launch date locally and locks premium access once the
-/// 3-day window elapses, unless the user has unlocked Pro.
+/// The trial start date lives in the Keychain so it survives uninstalls
+/// (UserDefaults is wiped on uninstall, Keychain is not), preventing the
+/// install-uninstall-reinstall reset loop. UserDefaults still caches the
+/// value for cheap reads during `refresh()`.
 final class TrialManager: ObservableObject {
 
     @Published private(set) var isPro: Bool = false
@@ -19,9 +77,24 @@ final class TrialManager: ObservableObject {
     private let proKey          = "lumiego.isPro"
 
     init() {
-        if defaults.object(forKey: firstLaunchKey) == nil {
-            defaults.set(Date(), forKey: firstLaunchKey)
+        // Resolve the canonical trial start with Keychain as source of truth.
+        let firstLaunch: Date
+        if let keychainDate = TrialKeychain.load() {
+            // Known across installs - this is the canonical value.
+            firstLaunch = keychainDate
+        } else if let legacyDate = defaults.object(forKey: firstLaunchKey) as? Date {
+            // Migrating an existing v1.0 / v1.0.1 user: move their date into
+            // the Keychain so future uninstalls don't reset their trial.
+            TrialKeychain.save(legacyDate)
+            firstLaunch = legacyDate
+        } else {
+            // True first launch (or a device whose Keychain was wiped).
+            let now = Date()
+            TrialKeychain.save(now)
+            firstLaunch = now
         }
+        // Keep UserDefaults in sync as a cache for refresh().
+        defaults.set(firstLaunch, forKey: firstLaunchKey)
         refresh()
     }
 
@@ -55,14 +128,20 @@ final class TrialManager: ObservableObject {
     }
 
     #if DEBUG
-    /// Test helpers - only compiled into debug builds.
+    /// Test helpers - only compiled into debug builds. These also rewrite the
+    /// Keychain entry so testing on a real device (where the Keychain persists)
+    /// actually resets the trial, not just the UserDefaults cache.
     func debugResetTrial() {
-        defaults.set(Date(), forKey: firstLaunchKey)
+        let now = Date()
+        defaults.set(now, forKey: firstLaunchKey)
+        TrialKeychain.save(now)
         defaults.set(false, forKey: proKey)
         refresh()
     }
     func debugExpireTrial() {
-        defaults.set(Date().addingTimeInterval(-4 * 86_400), forKey: firstLaunchKey)
+        let past = Date().addingTimeInterval(-4 * 86_400)
+        defaults.set(past, forKey: firstLaunchKey)
+        TrialKeychain.save(past)
         defaults.set(false, forKey: proKey)
         refresh()
     }
