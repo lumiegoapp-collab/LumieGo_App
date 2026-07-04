@@ -93,6 +93,13 @@ final class AuthManager: ObservableObject {
         withAnimation(.easeInOut) { isSignedIn = false }
     }
 
+    /// Developer-only bypass: triple-tap the footer on the login screen to skip
+    /// Sign in with Apple and enter the app as the dev account.
+    func devBypass() {
+        persist(id: "dev.lumiego.sameet", name: "Sameet Kulria", email: "sameet_kulria@icloud.com")
+        withAnimation(.easeInOut) { isSignedIn = true }
+    }
+
     /// App Store Guideline 5.1.1(v): account creation requires in-app account deletion.
     /// Returns false (and keeps the user signed in) if the server deletion failed.
     @discardableResult
@@ -287,6 +294,7 @@ struct LoginView: View {
                     .foregroundColor(.white.opacity(0.4))
                     .padding(.top, 10)
                     .padding(.bottom, 24)
+                    .onTapGesture(count: 3) { auth.devBypass() }
             }
         }
         .alert("Sign-in failed",
