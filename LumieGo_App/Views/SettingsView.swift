@@ -81,7 +81,12 @@ struct SettingsView: View {
                     PickerRow(label: "Quality", systemImage: "4k.tv", selection: $camera.videoQuality)
                     frameRateRow()
                     ToggleRow(label: "Stabilization", systemImage: "wand.and.stars", isOn: $camera.isStabilizationEnabled)
-                } header: { SectionHeader("Video") }
+                    ToggleRow(label: "Mirror Front Camera", systemImage: "arrow.left.arrow.right", isOn: $camera.frontMirrored)
+                    ToggleRow(label: "Save Both Formats", systemImage: "rectangle.portrait.on.rectangle.portrait", isOn: $camera.saveBothFormats)
+                } header: { SectionHeader("Video") } footer: {
+                    Text("Mirror Front Camera flips the selfie feed horizontally. Save Both Formats records an extra file at the alternate orientation (portrait + landscape) in every take.")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                }
 
                 // MARK: Saving
                 Section {

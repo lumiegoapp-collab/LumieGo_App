@@ -166,7 +166,12 @@ struct MainCameraView: View {
                 }
 
                 // Social media safe-zone overlay
-                if camera.socialGuide != .none {
+                if camera.socialGuide == .allPlatforms {
+                    AllPlatformsOverlay()
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                } else if camera.socialGuide != .none {
                     SocialSafeZoneOverlay(platform: camera.socialGuide)
                         .ignoresSafeArea()
                         .transition(.opacity)
@@ -306,6 +311,7 @@ struct MainCameraView: View {
             teleprompter.pause()
         } else {
             beginCountdown {
+                withAnimation(.easeOut(duration: 0.2)) { showFocus = false }
                 camera.startRecording()
                 expectingRecording = true
                 if teleprompter.isEnabled { teleprompter.play() }
@@ -483,6 +489,12 @@ struct BottomBar: View {
                     }
                     .padding(.horizontal, 16)
                 }
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1))
+                .padding(.horizontal, 8)
+                .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
@@ -692,6 +704,11 @@ struct LandscapeControls: View {
             HStack(spacing: 8) { content() }.padding(.horizontal, 16)
         }
         .frame(maxWidth: 520)
+        .padding(.vertical, 6)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .stroke(Color.white.opacity(0.12), lineWidth: 1))
+        .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
         .padding(.bottom, 8)
         .transition(.opacity)
     }
@@ -1196,47 +1213,115 @@ struct SocialSafeZoneOverlay: View {
     }
 }
 
+/// Liquid-glass framing border — frosted fill, specular gradient rim, soft glow.
+struct FrameCorners: View {
+    let rect: CGRect
+    let color: Color
+    private let radius: CGFloat = 22
+    private let lw:     CGFloat = 1.5
+
+    var body: some View {
+        ZStack {
+            // Very subtle frosted interior tint
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+
+            // Soft colour glow behind the rim
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .stroke(color.opacity(0.28), lineWidth: 10)
+                .blur(radius: 10)
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+
+            // Main rim — bright specular white at top, tinted at bottom
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.90), color.opacity(0.65)],
+                        startPoint: .top, endPoint: .bottom
+                    ),
+                    lineWidth: lw
+                )
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+
+            // Inner hairline — the thin refraction ring real glass shows
+            RoundedRectangle(cornerRadius: radius - 1, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+                .frame(width: rect.width - lw * 2, height: rect.height - lw * 2)
+                .position(x: rect.midX, y: rect.midY)
+        }
+    }
+}
+
+struct GuideLabel: View {
+    let text: String
+    let color: Color
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundColor(color)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().stroke(color.opacity(0.35), lineWidth: 0.5))
+    }
+}
+
 struct FramingGuideOverlay: View {
     var body: some View {
         GeometryReader { geo in
             let W = geo.size.width, H = geo.size.height
 
-            // Landscape 16:9 region - anchored to width, centered vertically
-            let landH = min(H, W * 9.0 / 16.0)
-            let landRect = CGRect(x: (W - W) / 2, y: (H - landH) / 2, width: W, height: landH)
+            let landH    = min(H, W * 9.0 / 16.0)
+            let landRect = CGRect(x: 0, y: (H - landH) / 2, width: W, height: landH)
 
-            // Portrait 9:16 region - true 9:16, anchored to width unless it would exceed height
             let portByWidth = W * 16.0 / 9.0
             let portW: CGFloat = portByWidth <= H ? W : H * 9.0 / 16.0
             let portH: CGFloat = portByWidth <= H ? portByWidth : H
             let portRect = CGRect(x: (W - portW) / 2, y: (H - portH) / 2, width: portW, height: portH)
 
             ZStack {
-                // Portrait guide (orange)
-                Rectangle()
-                    .stroke(Color.orange.opacity(0.95), style: StrokeStyle(lineWidth: 2, dash: [8, 5]))
-                    .frame(width: portRect.width, height: portRect.height)
-                    .position(x: portRect.midX, y: portRect.midY)
-                Text("PORTRAIT 9:16 · Social")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.orange)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Color.black.opacity(0.55))
-                    .clipShape(Capsule())
-                    .position(x: portRect.midX, y: portRect.minY + 44)
+                FrameCorners(rect: portRect, color: .orange)
+                GuideLabel(text: "9:16", color: .orange)
+                    .position(x: portRect.midX, y: portRect.minY + 22)
 
-                // Landscape guide (cyan)
-                Rectangle()
-                    .stroke(Color.cyan.opacity(0.95), style: StrokeStyle(lineWidth: 2, dash: [8, 5]))
-                    .frame(width: landRect.width, height: landRect.height)
+                FrameCorners(rect: landRect, color: Color(red: 0.3, green: 0.9, blue: 1.0))
+                GuideLabel(text: "16:9", color: Color(red: 0.3, green: 0.9, blue: 1.0))
                     .position(x: landRect.midX, y: landRect.midY)
-                Text("LANDSCAPE 16:9 · YouTube")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.cyan)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Color.black.opacity(0.55))
-                    .clipShape(Capsule())
-                    .position(x: landRect.midX, y: landRect.midY)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Shows 3 platform frames at once: 9:16 (TikTok/Reels), 4:5 (Instagram), 16:9 (YouTube).
+struct AllPlatformsOverlay: View {
+    private struct PlatformGuide {
+        let aspect: CGFloat; let label: String; let color: Color
+    }
+    private let guides: [PlatformGuide] = [
+        PlatformGuide(aspect: 9.0/16.0, label: "9:16 · TikTok / Reels",  color: .white),
+        PlatformGuide(aspect: 4.0/5.0,  label: "4:5 · Instagram Feed",    color: Color(red: 0.85, green: 0.55, blue: 1.0)),
+        PlatformGuide(aspect: 16.0/9.0, label: "16:9 · YouTube",           color: Color(red: 0.3, green: 0.9, blue: 1.0))
+    ]
+
+    var body: some View {
+        GeometryReader { geo in
+            let W = geo.size.width, H = geo.size.height
+            ZStack {
+                ForEach(Array(guides.enumerated()), id: \.offset) { _, g in
+                    let byWidth = W / g.aspect
+                    let fH  = min(H, byWidth)
+                    let fW  = min(W, fH * g.aspect)
+                    let rect = CGRect(x: (W - fW) / 2, y: (H - fH) / 2, width: fW, height: fH)
+                    ZStack {
+                        FrameCorners(rect: rect, color: g.color)
+                        GuideLabel(text: g.label, color: g.color)
+                            .position(x: rect.midX, y: rect.minY + 22)
+                    }
+                }
             }
         }
         .allowsHitTesting(false)
@@ -1279,16 +1364,22 @@ struct PresetChip: View {
 struct GridOverlay: View {
     var body: some View {
         GeometryReader { geo in
-            Path { p in
-                let w = geo.size.width, h = geo.size.height
-                for i in 1...2 {
-                    let x = w * CGFloat(i) / 3
-                    p.move(to: CGPoint(x: x, y: 0)); p.addLine(to: CGPoint(x: x, y: h))
-                    let y = h * CGFloat(i) / 3
-                    p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: w, y: y))
-                }
+            ZStack {
+                gridLines(geo).stroke(Color.white.opacity(0.10), lineWidth: 4).blur(radius: 3)
+                gridLines(geo).stroke(Color.white.opacity(0.20), lineWidth: 0.5)
             }
-            .stroke(Color.white.opacity(0.25), lineWidth: 0.5)
+        }
+    }
+
+    private func gridLines(_ geo: GeometryProxy) -> Path {
+        Path { p in
+            let w = geo.size.width, h = geo.size.height
+            for i in 1...2 {
+                let x = w * CGFloat(i) / 3
+                p.move(to: CGPoint(x: x, y: 0)); p.addLine(to: CGPoint(x: x, y: h))
+                let y = h * CGFloat(i) / 3
+                p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: w, y: y))
+            }
         }
     }
 }

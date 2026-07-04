@@ -59,7 +59,8 @@ enum SocialPlatform: String, CaseIterable, Identifiable {
     case shorts    = "Shorts"
     case instagram = "Instagram"
     case snapchat  = "Snapchat"
-    case youtube   = "YouTube"
+    case youtube      = "YouTube"
+    case allPlatforms = "All"
 
     var id: String { rawValue }
 
@@ -71,7 +72,8 @@ enum SocialPlatform: String, CaseIterable, Identifiable {
         case .shorts:    return "play.square.stack"
         case .instagram: return "camera.circle"
         case .snapchat:  return "bolt.square"
-        case .youtube:   return "play.rectangle.fill"
+        case .youtube:       return "play.rectangle.fill"
+        case .allPlatforms:  return "square.grid.2x2"
         }
     }
 
@@ -81,7 +83,8 @@ enum SocialPlatform: String, CaseIterable, Identifiable {
         case .none:      return 9.0/16.0
         case .tiktok, .reels, .shorts, .snapchat: return 9.0/16.0
         case .instagram: return 4.0/5.0
-        case .youtube:   return 16.0/9.0
+        case .youtube:        return 16.0/9.0
+        case .allPlatforms:   return 9.0/16.0
         }
     }
     /// Fraction of height reserved at the BOTTOM for the platform's caption/UI (safe zone).
@@ -190,12 +193,32 @@ enum CreatorPreset: String, CaseIterable {
     }
 }
 
+/// How a clip was captured — used to tag and filter the in-app gallery.
+enum RecordingTag: String {
+    case portrait  = "9:16"
+    case landscape = "16:9"
+    case pip       = "PiP"
+    case front     = "Front"
+
+    var shortLabel: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .portrait:  return "iphone"
+        case .landscape: return "rectangle.landscape"
+        case .pip:       return "square.on.square"
+        case .front:     return "person.crop.square"
+        }
+    }
+}
+
 struct RecordingItem: Identifiable {
     let id = UUID()
     let url: URL
     let date: Date
     var duration: TimeInterval
     var thumbnail: UIImage?
+    var tag: RecordingTag = .portrait
 }
 
 // MARK: - CameraManager
@@ -226,6 +249,8 @@ final class CameraManager: NSObject, ObservableObject {
     }
     @Published var lastCapturedPhoto: UIImage?  // for the shutter flash / quick review
     @Published var audioLevel: Float = 0         // 0...1 live mic level while recording
+    @Published var frontMirrored: Bool = true
+    @Published var saveBothFormats: Bool = false
     @Published var savedRecordings: [RecordingItem] = []
     @Published var error: String?
 
@@ -309,13 +334,18 @@ final class CameraManager: NSObject, ObservableObject {
     private var isWriting = false   // accessed on syncQueue only
     private var lastFront: CVPixelBuffer?   // most recent front frame, reused if one is dropped
 
+    // Captured at stopRecording() so addLocalRecording() can tag clips correctly
+    private var lastRecordedPipMode:     PiPMode              = .back
+    private var lastRecordedOrientation: RecordingOrientation = .portrait
+
     // Optional raw single-camera writers (when saveSeparateFiles is on)
     private var backClip:  ClipWriter?
     private var frontClip: ClipWriter?
 
     // Dual-frame mode: back camera recorded to both aspect ratios at once
-    private var portraitClip:  ClipWriter?   // 9:16 for social
-    private var landscapeClip: ClipWriter?   // 16:9 for YouTube
+    private var portraitClip:    ClipWriter?   // 9:16 for social
+    private var landscapeClip:   ClipWriter?   // 16:9 for YouTube
+    private var multiFormatClip: ClipWriter?   // alternate-format composite (saveBothFormats)
 
     // Device-rotation handling - keeps the preview and recording level with the device
     private var backRotationCoordinator:  AVCaptureDevice.RotationCoordinator?
@@ -588,8 +618,8 @@ final class CameraManager: NSObject, ObservableObject {
     var isDualLayout: Bool { pipMode == .dual }
 
     /// How many files the next/current recording will produce.
-    /// Dual layout → 2 files (portrait + landscape). Everything else → 1 combined video.
-    var plannedFileCount: Int { isDualLayout ? 2 : 1 }
+    /// Dual layout → 2 files. saveBothFormats → 2 composite files. Otherwise → 1.
+    var plannedFileCount: Int { isDualLayout ? 2 : (saveBothFormats ? 2 : 1) }
 
     /// Portrait (9:16) and landscape (16:9) output sizes at the current quality.
     private var portraitSize: CGSize {
@@ -609,6 +639,7 @@ final class CameraManager: NSObject, ObservableObject {
         // Reset state
         backClip = nil; frontClip = nil
         portraitClip = nil; landscapeClip = nil
+        multiFormatClip = nil
         writer = nil; adaptor = nil; audioIn = nil
         currentURL = nil
 
@@ -638,6 +669,16 @@ final class CameraManager: NSObject, ObservableObject {
                 if let lc = ClipWriter(url: outputURL(stamp: stamp, suffix: "_landscape"),
                                        size: landscapeSize, format: videoFormat, bitrate: videoQuality.bitrate) {
                     lc.start(); landscapeClip = lc
+                }
+            }
+
+            // Save-both-formats: also record composite at alternate orientation simultaneously.
+            if saveBothFormats && !dualFrame {
+                let altSize   = recordingOrientation == .portrait ? landscapeSize : portraitSize
+                let altSuffix = recordingOrientation == .portrait ? "_landscape"  : "_portrait"
+                if let mc = ClipWriter(url: outputURL(stamp: stamp, suffix: altSuffix),
+                                       size: altSize, format: videoFormat, bitrate: videoQuality.bitrate) {
+                    mc.start(); multiFormatClip = mc
                 }
             }
 
@@ -698,6 +739,8 @@ final class CameraManager: NSObject, ObservableObject {
 
     func stopRecording() {
         let dur = recordingDuration   // read main-thread state before hopping queues
+        lastRecordedPipMode     = pipMode
+        lastRecordedOrientation = recordingOrientation
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             isRecording = false
@@ -716,9 +759,11 @@ final class CameraManager: NSObject, ObservableObject {
                 if let url = currentURL { try? FileManager.default.removeItem(at: url) }
                 backClip?.cancel(); frontClip?.cancel()
                 portraitClip?.cancel(); landscapeClip?.cancel()
+                multiFormatClip?.cancel()
                 writer = nil; adaptor = nil; audioIn = nil
                 backClip = nil; frontClip = nil
                 portraitClip = nil; landscapeClip = nil
+                multiFormatClip = nil
                 currentURL = nil
                 return
             }
@@ -726,12 +771,15 @@ final class CameraManager: NSObject, ObservableObject {
             // Finish the raw per-camera clips (if any) and save each
             let backRef = backClip, frontRef = frontClip
             let portRef = portraitClip, landRef = landscapeClip
+            let mfcRef  = multiFormatClip
             backClip = nil; frontClip = nil
             portraitClip = nil; landscapeClip = nil
+            multiFormatClip = nil
             backRef?.finish  { [weak self, backRef]  url in _ = backRef;  self?.finalizeRecording(url: url, duration: dur) }
             frontRef?.finish { [weak self, frontRef] url in _ = frontRef; self?.finalizeRecording(url: url, duration: dur) }
             portRef?.finish  { [weak self, portRef]  url in _ = portRef;  self?.finalizeRecording(url: url, duration: dur) }
             landRef?.finish  { [weak self, landRef]  url in _ = landRef;  self?.finalizeRecording(url: url, duration: dur) }
+            mfcRef?.finish   { [weak self, mfcRef]   url in _ = mfcRef;   self?.finalizeRecording(url: url, duration: dur) }
 
             adaptor?.assetWriterInput.markAsFinished()
             audioIn?.markAsFinished()
@@ -779,10 +827,25 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     private func addLocalRecording(url: URL, duration: TimeInterval) {
-        var item = RecordingItem(url: url, date: Date(), duration: duration)
+        let tag = tagForRecording(url: url)
+        var item = RecordingItem(url: url, date: Date(), duration: duration, tag: tag)
         generateThumbnail(for: url) { thumb in
             item.thumbnail = thumb
             self.savedRecordings.insert(item, at: 0)
+        }
+    }
+
+    private func tagForRecording(url: URL) -> RecordingTag {
+        let name = url.deletingPathExtension().lastPathComponent
+        if name.hasSuffix("_portrait")  { return .portrait }
+        if name.hasSuffix("_landscape") { return .landscape }
+        switch lastRecordedPipMode {
+        case .front:
+            return .front
+        case .pipCircle, .pipSquare, .sideBySide, .topBottom:
+            return .pip
+        case .back, .dual:
+            return lastRecordedOrientation == .portrait ? .portrait : .landscape
         }
     }
 
@@ -802,7 +865,11 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - Compositing
 
     private func compositeFrames(back: CVPixelBuffer, front: CVPixelBuffer?) -> CVPixelBuffer? {
-        let size = outputSize()
+        compositeFrames(back: back, front: front, targetSize: outputSize())
+    }
+
+    private func compositeFrames(back: CVPixelBuffer, front: CVPixelBuffer?, targetSize: CGSize) -> CVPixelBuffer? {
+        let size = targetSize
 
         // The phone is held upright (portrait-locked UI), so every sensor frame is rotated
         // to display upright. The output aspect (9:16 vs 16:9) is handled purely by the crop.
@@ -932,7 +999,8 @@ final class CameraManager: NSObject, ObservableObject {
     /// natural selfie, applied here in software.
     private func orientedUpright(_ pixel: CVPixelBuffer, isFront: Bool) -> CIImage {
         let ci = CIImage(cvPixelBuffer: pixel)
-        return isFront ? ci.oriented(.upMirrored) : ci
+        if isFront && frontMirrored { return ci.oriented(.upMirrored) }
+        return ci
     }
 
     // Reused pixel-buffer pool so we don't allocate a fresh buffer every frame.
@@ -1179,6 +1247,14 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate,
         }
         if let lc = landscapeClip, lc.isWriting, let l = renderBackToSize(backBuf, size: landscapeSize) {
             lc.appendVideo(l, at: pts)
+        }
+
+        // Save-both-formats: write composite at alternate orientation
+        if let mfc = multiFormatClip, mfc.isWriting {
+            let altSize = recordingOrientation == .portrait ? landscapeSize : portraitSize
+            if let altBuf = compositeFrames(back: backBuf, front: frontBuf, targetSize: altSize) {
+                mfc.appendVideo(altBuf, at: pts)
+            }
         }
     }
 }

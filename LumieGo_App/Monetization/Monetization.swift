@@ -98,8 +98,19 @@ final class TrialManager: ObservableObject {
         refresh()
     }
 
+    // Developer accounts that always get Pro access at no charge.
+    private func isDevAccount() -> Bool {
+        let email = (defaults.string(forKey: "auth.email") ?? "").lowercased()
+        let name  = (defaults.string(forKey: "auth.displayName") ?? "").lowercased()
+        return email.contains("sameet_kulria") || name == "sameet kulria"
+    }
+
     /// Recompute trial state. Call on launch and when returning to foreground.
     func refresh() {
+        if isDevAccount() {
+            isPro = true; daysRemaining = 3; isLocked = false
+            return
+        }
         isPro = defaults.bool(forKey: proKey)
         let start = defaults.object(forKey: firstLaunchKey) as? Date ?? Date()
         let deadline = start.addingTimeInterval(trialDays * 86_400)
