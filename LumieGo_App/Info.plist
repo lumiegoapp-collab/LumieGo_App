@@ -13,14 +13,12 @@
 		<key>UIImageRespectsSafeAreaInsets</key>
 		<true/>
 	</dict>
-
 	<key>FacebookAppID</key>
 	<string>1521991912739827</string>
 	<key>FacebookClientToken</key>
-	<string>YOUR_CLIENT_TOKEN</string>
+	<string>c2f2677d7fbce8e70f4f7e4d00fb23f6</string>
 	<key>FacebookDisplayName</key>
 	<string>LumieGo</string>
-
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -30,7 +28,6 @@
 			</array>
 		</dict>
 	</array>
-
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>fbapi</string>
