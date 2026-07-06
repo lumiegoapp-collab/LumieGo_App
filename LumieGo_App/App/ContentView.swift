@@ -1,36 +1,50 @@
 import SwiftUI
 import AVFoundation
+import AppTrackingTransparency
+import FBSDKCoreKit
 
 @main
 struct LumieGoApp: App {
-    // TODO: After linking FBSDKCoreKit to the target in Xcode, uncomment these two lines
-    // and add `import FBSDKCoreKit` at the top, then delete this comment block.
-    // @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .statusBarHidden()
-                // TODO: uncomment once FBSDKCoreKit is linked:
-                // .onOpenURL { url in
-                //     ApplicationDelegate.shared.application(
-                //         UIApplication.shared, open: url,
-                //         sourceApplication: nil,
-                //         annotation: [UIApplication.OpenURLOptionsKey.annotation: ""]
-                //     )
-                // }
+                .onOpenURL { url in
+                    ApplicationDelegate.shared.application(
+                        UIApplication.shared,
+                        open: url,
+                        sourceApplication: nil,
+                        annotation: [UIApplication.OpenURLOptionsKey.annotation: ""]
+                    )
+                }
         }
     }
 }
 
-// TODO: uncomment once FBSDKCoreKit is linked to the target:
-// class AppDelegate: NSObject, UIApplicationDelegate {
-//     func application(_ application: UIApplication,
-//                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
-//         ApplicationDelegate.shared.application(application, didFinishLaunchingWithOptions: launchOptions)
-//         return true
-//     }
-// }
+/// Hooks the Facebook SDK and ATT into the UIKit app lifecycle.
+class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        ApplicationDelegate.shared.application(application, didFinishLaunchingWithOptions: launchOptions)
+
+        // Request ATT authorisation after a brief delay so the app's first screen
+        // is visible before the system dialog appears (Apple recommends context first).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            ATTrackingManager.requestTrackingAuthorization { status in
+                // Facebook SDK automatically reads the ATT status — no extra call needed.
+                // status == .authorized  → full IDFA tracking
+                // status == .denied / .restricted → limited, aggregated-only measurement
+                _ = status
+            }
+        }
+
+        return true
+    }
+}
 
 // MARK: - Camera Preview (UIViewRepresentable)
 
