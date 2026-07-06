@@ -483,13 +483,14 @@ struct BottomBar: View {
     @State private var panel: BottomPanel = .none
 
     private func toggle(_ p: BottomPanel) {
-        withAnimation(.spring(response: 0.3)) { panel = (panel == p) ? .none : p }
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) {
+            panel = (panel == p) ? .none : p
+        }
     }
     private func closePanel() {
-        withAnimation(.spring(response: 0.3)) { panel = .none }
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) { panel = .none }
     }
 
-    /// A consistent circular control matching the landscape side strip.
     private func roundButton(icon: String, active: Bool = false, tint: Color = .white,
                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -504,100 +505,154 @@ struct BottomBar: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
-            // Live audio meter while recording
-            if camera.isRecording {
-                AudioMeter(level: camera.audioLevel)
-                    .transition(.opacity)
-            }
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 10) {
+                if camera.isRecording {
+                    AudioMeter(level: camera.audioLevel).transition(.opacity)
+                }
 
-            // Expanded sub-options - only one panel open at a time
-            if panel == .layout {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(PiPMode.allCases, id: \.self) { mode in
-                            PiPModeChip(mode: mode, selected: camera.pipMode == mode) {
-                                camera.pipMode = mode
-                                closePanel()
-                            }
+                // Photo / Video picker + flip
+                HStack(spacing: 12) {
+                    Picker("", selection: $camera.captureMode) {
+                        ForEach(CaptureMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue).tag(mode)
                         }
                     }
-                    .padding(.horizontal, 16)
-                }
-                .padding(.vertical, 6)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1))
-                .padding(.horizontal, 8)
-                .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
+                    .pickerStyle(.segmented)
+                    .frame(width: 180)
 
-            // Photo / Video mode toggle, with the camera-flip button on its right
-            HStack(spacing: 12) {
-                Picker("", selection: $camera.captureMode) {
-                    ForEach(CaptureMode.allCases, id: \.self) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 180)
-
-                Button { withAnimation(.spring(response: 0.3)) { camera.swapCameras() } } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath.camera")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.white)
-                        .frame(width: 38, height: 38)
-                        .background(Color.white.opacity(0.14))
-                        .clipShape(Circle())
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
-
-            // Zoom pills (centered, above the shutter)
-            HStack(spacing: 6) {
-                ForEach([1.0, 2.0, 3.0], id: \.self) { z in
-                    Button {
-                        withAnimation(.spring(response: 0.25)) { camera.setZoom(z) }
-                    } label: {
-                        Text(camera.currentZoom == z ? "\(Int(z))×" : "\(Int(z))")
-                            .font(.system(size: 13, weight: camera.currentZoom == z ? .bold : .regular))
-                            .foregroundColor(camera.currentZoom == z ? .yellow : .white.opacity(0.85))
-                            .frame(width: 34, height: 34)
-                            .background(Color.black.opacity(0.35))
+                    Button { withAnimation(.spring(response: 0.3)) { camera.swapCameras() } } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath.camera")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.white)
+                            .frame(width: 38, height: 38)
+                            .background(Color.white.opacity(0.14))
                             .clipShape(Circle())
                     }
                 }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+
+                // Zoom — single glass pill
+                ZoomPillView(camera: camera)
+
+                // Flash · Record · Layout
+                HStack(alignment: .center) {
+                    roundButton(icon: camera.isFlashOn ? "bolt.fill" : "bolt.slash",
+                                active: camera.isFlashOn, tint: .yellow) { camera.toggleFlash() }
+                    Spacer()
+                    RecordButton(isRecording: camera.isRecording,
+                                 isPhoto: camera.captureMode == .photo,
+                                 action: onPrimaryAction)
+                    Spacer()
+                    roundButton(icon: "rectangle.3.group",
+                                active: panel == .layout,
+                                tint: .orange) { toggle(.layout) }
+                }
+                .padding(.horizontal, 28).padding(.vertical, 14)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.bottom, 44)
             }
+            .background(LinearGradient(colors: [.clear, .black.opacity(0.55)],
+                                        startPoint: .top, endPoint: .bottom))
 
-            // Flash · Record · Layout - on a blurred strip
-            // (teleprompter now lives in the top bar next to Settings)
-            HStack(alignment: .center) {
-                roundButton(icon: camera.isFlashOn ? "bolt.fill" : "bolt.slash",
-                            active: camera.isFlashOn, tint: .yellow) { camera.toggleFlash() }
-
-                Spacer()
-
-                RecordButton(isRecording: camera.isRecording,
-                             isPhoto: camera.captureMode == .photo,
-                             action: onPrimaryAction)
-
-                Spacer()
-
-                roundButton(icon: "rectangle.3.group",
-                            active: panel == .layout) { toggle(.layout) }
+            // Floating layout picker popup — anchored above the layout button (right side)
+            if panel == .layout {
+                HStack {
+                    Spacer()
+                    LayoutPickerPopup(camera: camera, onSelect: closePanel)
+                        .padding(.trailing, 16)
+                }
+                .padding(.bottom, 168)
+                .transition(.scale(scale: 0.88, anchor: .bottomTrailing).combined(with: .opacity))
+                .zIndex(10)
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 14)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .padding(.horizontal, 16)
-            .padding(.bottom, 44)
         }
-        .background(LinearGradient(colors: [.clear, .black.opacity(0.55)],
-                                    startPoint: .top, endPoint: .bottom))
-        .buttonStyle(.plain)   // opt out of iOS 26 auto Liquid Glass so controls keep their custom look
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Zoom Pill (iOS Camera style)
+
+struct ZoomPillView: View {
+    @ObservedObject var camera: CameraManager
+    private let levels: [Double] = [1, 2, 3]
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(levels, id: \.self) { z in
+                Button {
+                    withAnimation(.spring(response: 0.25)) { camera.setZoom(z) }
+                } label: {
+                    let active = abs(camera.currentZoom - z) < 0.1
+                    ZStack {
+                        if active {
+                            Circle()
+                                .fill(Color.black.opacity(0.55))
+                                .frame(width: 36, height: 36)
+                        }
+                        Text(active ? "\(zLabel(z))×" : zLabel(z))
+                            .font(.system(size: active ? 14 : 13,
+                                          weight: active ? .bold : .semibold))
+                            .foregroundColor(active ? .yellow : .white.opacity(0.82))
+                            .animation(.easeOut(duration: 0.18), value: active)
+                    }
+                    .frame(width: 44, height: 38)
+                }
+            }
+        }
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .background {
+            Capsule().fill(.thinMaterial)
+            Capsule().fill(Color.black.opacity(0.50))
+        }
+        .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 0.5))
+    }
+
+    private func zLabel(_ z: Double) -> String {
+        z == 1 ? "1" : z == 0.5 ? ".5" : String(Int(z))
+    }
+}
+
+// MARK: - Layout Picker Popup
+
+struct LayoutPickerPopup: View {
+    @ObservedObject var camera: CameraManager
+    let onSelect: () -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(PiPMode.allCases, id: \.self) { mode in
+                let active = camera.pipMode == mode
+                Button {
+                    camera.pipMode = mode
+                    onSelect()
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: mode.icon)
+                            .font(.system(size: 17, weight: .medium))
+                        Text(mode.shortLabel)
+                            .font(.system(size: 9, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(active ? .yellow : .white.opacity(0.82))
+                    .frame(width: 52, height: 52)
+                    .background(active ? Color.yellow.opacity(0.18) : Color.white.opacity(0.06),
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 8)
+        .background {
+            RoundedRectangle(cornerRadius: 22, style: .continuous).fill(.ultraThinMaterial)
+            RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.black.opacity(0.65))
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.white.opacity(0.13), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.55), radius: 20, x: 0, y: 6)
     }
 }
 
@@ -661,26 +716,29 @@ struct LandscapeControls: View {
 
     var body: some View {
         ZStack {
-            // Center column: expanded layout chips, audio meter, zoom - anchored to the bottom
+            // Center column: audio meter + zoom pill, anchored to bottom
             VStack(spacing: 8) {
                 Spacer()
-                if panel == .layout {
-                    chipScroll {
-                        ForEach(PiPMode.allCases, id: \.self) { m in
-                            PiPModeChip(mode: m, selected: camera.pipMode == m) {
-                                camera.pipMode = m; closePanel()
-                            }
-                        }
-                    }
-                }
                 if camera.isRecording {
                     AudioMeter(level: camera.audioLevel).transition(.opacity)
                 }
-                zoomPills.padding(.bottom, 16)
+                ZoomPillView(camera: camera).padding(.bottom, 16)
             }
             .frame(maxWidth: .infinity)
 
-            // Bottom-left corner: Photo/Video on a blurred strip so it stays legible
+            // Floating layout popup — left of the right strip
+            if panel == .layout {
+                HStack {
+                    Spacer()
+                    LayoutPickerPopup(camera: camera, onSelect: closePanel)
+                        .padding(.trailing, 110)
+                }
+                .frame(maxHeight: .infinity, alignment: .center)
+                .transition(.scale(scale: 0.88, anchor: .trailing).combined(with: .opacity))
+                .zIndex(10)
+            }
+
+            // Bottom-left: Photo/Video picker
             HStack {
                 Picker("", selection: $camera.captureMode) {
                     ForEach(CaptureMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
@@ -689,21 +747,21 @@ struct LandscapeControls: View {
                 .frame(width: 150)
                 .padding(12)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .padding(.leading, 40)    // clear the landscape notch / Dynamic Island
+                .padding(.leading, 40)
                 .padding(.bottom, 24)
                 Spacer()
             }
             .frame(maxHeight: .infinity, alignment: .bottom)
 
-            // Right column: flash, layout, shutter, flip - evenly spaced on a blurred strip
-            // (teleprompter now lives in the top strip next to Settings)
+            // Right column: flash, layout, shutter, flip
             HStack {
                 Spacer()
                 VStack(spacing: 22) {
                     sideButton(icon: camera.isFlashOn ? "bolt.fill" : "bolt.slash",
                                active: camera.isFlashOn, tint: .yellow) { camera.toggleFlash() }
                     sideButton(icon: "rectangle.3.group",
-                               active: panel == .layout) { toggle(.layout) }
+                               active: panel == .layout,
+                               tint: .orange) { toggle(.layout) }
                     RecordButton(isRecording: camera.isRecording,
                                  isPhoto: camera.captureMode == .photo,
                                  action: onPrimaryAction)
@@ -711,16 +769,14 @@ struct LandscapeControls: View {
                         withAnimation(.spring(response: 0.3)) { camera.swapCameras() }
                     }
                 }
-                .padding(.vertical, 18)
-                .padding(.horizontal, 10)
+                .padding(.vertical, 18).padding(.horizontal, 10)
                 .background(.ultraThinMaterial, in: Capsule())
-                .padding(.trailing, 40)   // clear the landscape notch / Dynamic Island
+                .padding(.trailing, 40)
             }
         }
         .buttonStyle(.plain)
     }
 
-    /// A consistent circular control for the landscape side strip.
     private func sideButton(icon: String, active: Bool = false, tint: Color = .white,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -732,37 +788,6 @@ struct LandscapeControls: View {
                 .clipShape(Circle())
         }
         .accessibilityLabel(a11yName(for: icon))
-    }
-
-    private func chipScroll<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) { content() }.padding(.horizontal, 16)
-        }
-        .frame(maxWidth: 520)
-        .padding(.vertical, 6)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .stroke(Color.white.opacity(0.12), lineWidth: 1))
-        .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
-        .padding(.bottom, 8)
-        .transition(.opacity)
-    }
-
-    private var zoomPills: some View {
-        HStack(spacing: 6) {
-            ForEach([1.0, 2.0, 3.0], id: \.self) { z in
-                Button {
-                    withAnimation(.spring(response: 0.25)) { camera.setZoom(z) }
-                } label: {
-                    Text(camera.currentZoom == z ? "\(Int(z))×" : "\(Int(z))")
-                        .font(.system(size: 13, weight: camera.currentZoom == z ? .bold : .regular))
-                        .foregroundColor(camera.currentZoom == z ? .yellow : .white.opacity(0.85))
-                        .frame(width: 34, height: 34)
-                        .background(Color.black.opacity(0.35))
-                        .clipShape(Circle())
-                }
-            }
-        }
     }
 }
 
