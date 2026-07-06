@@ -395,13 +395,12 @@ struct TopBar: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // Left controls on a blurred strip - grid, countdown
+            // Left controls — grid, countdown
             HStack(spacing: 4) {
                 ControlButton(icon: "grid",
                               tint: camera.showGrid ? .yellow : .white) {
                     camera.showGrid.toggle()
                 }
-                // Countdown cycle: off → 3 → 5 → 10 → off
                 Button {
                     camera.countdownMode = [0, 3, 5, 10].first(where: { $0 > camera.countdownMode }) ?? 0
                 } label: {
@@ -423,7 +422,7 @@ struct TopBar: View {
                 }
             }
             .padding(.horizontal, 6).padding(.vertical, 4)
-            .background(.ultraThinMaterial, in: Capsule())
+            .glassEffect(.clear)
 
             Spacer()
 
@@ -451,22 +450,22 @@ struct TopBar: View {
 
             Spacer()
 
-            // Right controls on a blurred strip - recordings, teleprompter, settings
+            // Right controls — recordings, teleprompter, settings
             HStack(spacing: 4) {
                 ControlButton(icon: "rectangle.stack") { showRecordings = true }
                 ControlButton(icon: "text.alignleft",
                               tint: teleprompter.isEnabled ? .orange : .white) {
                     withAnimation(.spring(response: 0.3)) { teleprompter.toggleEnabled() }
                 }
-                ControlButton(icon: "gearshape")       { showSettings   = true }
+                ControlButton(icon: "gearshape") { showSettings = true }
             }
             .padding(.horizontal, 6).padding(.vertical, 4)
-            .background(.ultraThinMaterial, in: Capsule())
+            .glassEffect(.clear)
         }
         .padding(.horizontal, 14)
-        .padding(.top, 60)      // sit below the Dynamic Island / notch - strips never go under it
+        .padding(.top, 60)
         .padding(.bottom, 8)
-        .buttonStyle(.plain)    // opt out of iOS 26 auto Liquid Glass so icons stay compact
+        .buttonStyle(.plain)
     }
 }
 
@@ -498,9 +497,8 @@ struct BottomBar: View {
                 .font(.system(size: 20, weight: .medium))
                 .foregroundColor(active ? tint : .white)
                 .frame(width: 50, height: 50)
-                .background(active ? tint.opacity(0.22) : Color.white.opacity(0.14))
-                .clipShape(Circle())
         }
+        .glassEffect(.regular.interactive())
         .accessibilityLabel(a11yName(for: icon))
     }
 
@@ -531,7 +529,7 @@ struct BottomBar: View {
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: Capsule())
+                .glassEffect(.clear)
 
                 // Zoom — single glass pill
                 ZoomPillView(camera: camera)
@@ -550,7 +548,7 @@ struct BottomBar: View {
                                 tint: .orange) { toggle(.layout) }
                 }
                 .padding(.horizontal, 28).padding(.vertical, 14)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+                .glassEffect(.clear, in: .rect(cornerRadius: 28))
                 .padding(.horizontal, 16)
                 .padding(.bottom, 44)
             }
@@ -573,41 +571,30 @@ struct BottomBar: View {
     }
 }
 
-// MARK: - Zoom Pill (iOS Camera style)
+// MARK: - Zoom Pill (iOS Camera style — real Liquid Glass with GlassEffectContainer)
 
 struct ZoomPillView: View {
     @ObservedObject var camera: CameraManager
     private let levels: [Double] = [1, 2, 3]
 
     var body: some View {
+        // All levels share one glass pill — active level highlighted via text color only.
         HStack(spacing: 0) {
             ForEach(levels, id: \.self) { z in
+                let active = abs(camera.currentZoom - z) < 0.1
                 Button {
                     withAnimation(.spring(response: 0.25)) { camera.setZoom(z) }
                 } label: {
-                    let active = abs(camera.currentZoom - z) < 0.1
-                    ZStack {
-                        if active {
-                            Circle()
-                                .fill(Color.black.opacity(0.55))
-                                .frame(width: 36, height: 36)
-                        }
-                        Text(active ? "\(zLabel(z))×" : zLabel(z))
-                            .font(.system(size: active ? 14 : 13,
-                                          weight: active ? .bold : .semibold))
-                            .foregroundColor(active ? .yellow : .white.opacity(0.82))
-                            .animation(.easeOut(duration: 0.18), value: active)
-                    }
-                    .frame(width: 44, height: 38)
+                    Text(active ? "\(zLabel(z))×" : zLabel(z))
+                        .font(.system(size: active ? 15 : 13,
+                                      weight: active ? .bold : .semibold))
+                        .foregroundColor(active ? .yellow : .white.opacity(0.7))
+                        .frame(width: 44, height: 36)
                 }
+                .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 6).padding(.vertical, 3)
-        .background {
-            Capsule().fill(.thinMaterial)
-            Capsule().fill(Color.black.opacity(0.50))
-        }
-        .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 0.5))
+        .glassEffect(.clear)
     }
 
     private func zLabel(_ z: Double) -> String {
@@ -622,11 +609,14 @@ struct LayoutPickerPopup: View {
     let onSelect: () -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        // Each mode is its own glass circle — active mode highlighted via icon/text color only.
+        HStack(spacing: 8) {
             ForEach(PiPMode.allCases, id: \.self) { mode in
                 let active = camera.pipMode == mode
                 Button {
-                    camera.pipMode = mode
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) {
+                        camera.pipMode = mode
+                    }
                     onSelect()
                 } label: {
                     VStack(spacing: 4) {
@@ -636,23 +626,16 @@ struct LayoutPickerPopup: View {
                             .font(.system(size: 9, weight: .semibold))
                             .lineLimit(1)
                     }
-                    .foregroundColor(active ? .yellow : .white.opacity(0.82))
-                    .frame(width: 52, height: 52)
-                    .background(active ? Color.yellow.opacity(0.18) : Color.white.opacity(0.06),
-                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .foregroundColor(active ? .yellow : .white.opacity(0.75))
+                    .frame(width: 44, height: 44)
                 }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive())
             }
         }
-        .padding(.horizontal, 8).padding(.vertical, 8)
-        .background {
-            RoundedRectangle(cornerRadius: 22, style: .continuous).fill(.ultraThinMaterial)
-            RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.black.opacity(0.65))
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.white.opacity(0.13), lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(0.55), radius: 20, x: 0, y: 6)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .shadow(color: .black.opacity(0.45), radius: 20, x: 0, y: 6)
     }
 }
 
@@ -746,7 +729,7 @@ struct LandscapeControls: View {
                 .pickerStyle(.segmented)
                 .frame(width: 150)
                 .padding(12)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .glassEffect(.clear, in: .rect(cornerRadius: 18))
                 .padding(.leading, 40)
                 .padding(.bottom, 24)
                 Spacer()
@@ -770,7 +753,7 @@ struct LandscapeControls: View {
                     }
                 }
                 .padding(.vertical, 18).padding(.horizontal, 10)
-                .background(.ultraThinMaterial, in: Capsule())
+                .glassEffect(.clear)
                 .padding(.trailing, 40)
             }
         }
@@ -784,9 +767,8 @@ struct LandscapeControls: View {
                 .font(.system(size: 19, weight: .medium))
                 .foregroundColor(active ? tint : .white)
                 .frame(width: 48, height: 48)
-                .background(active ? tint.opacity(0.22) : Color.white.opacity(0.14))
-                .clipShape(Circle())
         }
+        .glassEffect(.regular.interactive())
         .accessibilityLabel(a11yName(for: icon))
     }
 }
@@ -928,8 +910,7 @@ struct RecTimerView: View {
         .lineLimit(1)
         .fixedSize()
         .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(Color.black.opacity(0.45))
-        .clipShape(Capsule())
+        .glassEffect(.clear)
         .onAppear {
             withAnimation(.easeInOut(duration: 0.6).repeatForever()) { blink = false }
         }
@@ -1083,8 +1064,7 @@ struct ShareBanner: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1))
+        .glassEffect(.clear)
         .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
         .padding(.horizontal, 18)
         .buttonStyle(.plain)
@@ -1150,7 +1130,7 @@ struct LandscapeTopBar: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(.ultraThinMaterial, in: Capsule())
+        .glassEffect(.clear)
         .buttonStyle(.plain)
     }
 }
@@ -1193,8 +1173,7 @@ struct AudioMeter: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(Color.black.opacity(0.4))
-        .clipShape(Capsule())
+        .glassEffect(.clear)
         .animation(.linear(duration: 0.06), value: level)
     }
     private func barColor(_ t: Float) -> Color {

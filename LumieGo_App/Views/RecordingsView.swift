@@ -223,13 +223,11 @@ struct CategoryChip: View {
                 Text(label)
                     .font(.system(size: 12, weight: .semibold))
             }
-            .foregroundColor(selected ? .black : .white.opacity(0.75))
+            .foregroundColor(selected ? .primary : .white.opacity(0.75))
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(selected ? Color.white : Color.white.opacity(0.10),
-                        in: Capsule())
         }
-        .buttonStyle(.plain)
+        .glassEffect(selected ? .regular.tint(.white).interactive() : .regular.interactive())
     }
 }
 
