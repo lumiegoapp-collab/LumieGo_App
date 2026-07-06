@@ -43,7 +43,12 @@ struct RecordingsView: View {
     @State private var exportURL:   URL?
     @State private var selectedCategory: RecordingCategory = .all
 
-    private let columns = [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
+    private let gap: CGFloat = 1.5
+    private let columns = [
+        GridItem(.flexible(), spacing: 1.5),
+        GridItem(.flexible(), spacing: 1.5),
+        GridItem(.flexible(), spacing: 1.5)
+    ]
 
     private var filtered: [RecordingItem] {
         camera.savedRecordings.filter { selectedCategory.matches($0.tag) }
@@ -135,32 +140,16 @@ struct RecordingsView: View {
     // MARK: Grid
 
     private var clipGrid: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 2) {
+        ScrollView(showsIndicators: false) {
+            LazyVGrid(columns: columns, spacing: gap) {
                 ForEach(filtered) { item in
                     GalleryCell(item: item)
-                        .onTapGesture   { playerItem = item }
-                        .contextMenu    { contextMenu(for: item) }
-                        .overlay(alignment: .topTrailing) {
-                            shareButton(for: item)
-                        }
+                        .onTapGesture { playerItem = item }
+                        .contextMenu  { contextMenu(for: item) }
                 }
             }
+            .padding(.top, gap)
         }
-    }
-
-    // MARK: Share overlay button
-
-    @ViewBuilder
-    private func shareButton(for item: RecordingItem) -> some View {
-        Button { shareURL = item.url } label: {
-            Image(systemName: "square.and.arrow.up")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.white)
-                .frame(width: 28, height: 28)
-                .background(.ultraThinMaterial, in: Circle())
-        }
-        .padding(6)
     }
 
     // MARK: Context menu
@@ -250,44 +239,57 @@ struct GalleryCell: View {
     let item: RecordingItem
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Group {
+        GeometryReader { geo in
+            ZStack {
+                // Thumbnail or placeholder
                 if let thumb = item.thumbnail {
                     Image(uiImage: thumb)
                         .resizable()
                         .scaledToFill()
+                        .frame(width: geo.size.width, height: geo.size.width)
+                        .clipped()
                 } else {
                     Rectangle()
                         .fill(Color.white.opacity(0.07))
+                        .frame(width: geo.size.width, height: geo.size.width)
                         .overlay(
                             Image(systemName: item.tag.icon)
-                                .font(.system(size: 24))
-                                .foregroundColor(.white.opacity(0.3))
+                                .font(.system(size: 20))
+                                .foregroundColor(.white.opacity(0.25))
                         )
                 }
-            }
-            .frame(maxWidth: .infinity)
-            .aspectRatio(9/16, contentMode: .fit)
-            .clipped()
 
-            // Bottom info bar
-            HStack(spacing: 0) {
-                Text(durationText)
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.85))
-                Spacer()
-                TagBadge(tag: item.tag)
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 5)
-            .background(
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.65)],
-                    startPoint: .top, endPoint: .bottom
+                // Scrim + overlays
+                VStack {
+                    // Tag badge — top right
+                    HStack {
+                        Spacer()
+                        TagBadge(tag: item.tag)
+                            .padding(5)
+                    }
+                    Spacer()
+                    // Duration — bottom left
+                    HStack {
+                        Text(durationText)
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white)
+                            .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 1)
+                            .padding(.horizontal, 5)
+                            .padding(.bottom, 5)
+                        Spacer()
+                    }
+                }
+                .frame(width: geo.size.width, height: geo.size.width)
+                // Subtle vignette so text is readable without a heavy scrim
+                .background(
+                    LinearGradient(
+                        colors: [.black.opacity(0.18), .clear, .black.opacity(0.35)],
+                        startPoint: .top, endPoint: .bottom
+                    )
                 )
-            )
+            }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .aspectRatio(1, contentMode: .fit) // square cell
     }
 
     private var durationText: String {
@@ -312,17 +314,13 @@ struct TagBadge: View {
     }
 
     var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: tag.icon)
-                .font(.system(size: 8, weight: .semibold))
-            Text(tag.shortLabel)
-                .font(.system(size: 9, weight: .bold))
-        }
-        .foregroundColor(color)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 3)
-        .background(color.opacity(0.18), in: Capsule())
-        .overlay(Capsule().stroke(color.opacity(0.35), lineWidth: 0.5))
+        Text(tag.shortLabel)
+            .font(.system(size: 8, weight: .bold))
+            .foregroundColor(color)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(Color.black.opacity(0.55), in: Capsule())
+            .overlay(Capsule().stroke(color.opacity(0.55), lineWidth: 0.5))
     }
 }
 
