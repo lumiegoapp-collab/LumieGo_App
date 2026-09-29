@@ -77,23 +77,36 @@ final class TrialManager: ObservableObject {
     private let proKey          = "lumiego.isPro"
 
     init() {
-        // Resolve the canonical trial start with Keychain as source of truth.
+        // Fast path: UserDefaults has the cached trial date from a previous run.
+        // Avoid the Keychain read on every launch — SecItemCopyMatching blocks the
+        // main thread for ~100-400 ms on the first access after a cold start.
+        if let cached = defaults.object(forKey: firstLaunchKey) as? Date {
+            refresh()
+            // Lazy migration in background: ensure Keychain is populated so a
+            // future uninstall/reinstall can't reset the trial.
+            DispatchQueue.global(qos: .background).async {
+                if TrialKeychain.load() == nil { TrialKeychain.save(cached) }
+            }
+            return
+        }
+
+        // Cold path: no UserDefaults cache (first ever launch, or post-reinstall
+        // where UserDefaults was wiped). Must check Keychain here.
+        // This path runs at most once per install, so the blocking read is acceptable.
         let firstLaunch: Date
         if let keychainDate = TrialKeychain.load() {
-            // Known across installs - this is the canonical value.
+            // Post-reinstall: Keychain survived, restore the original trial start date.
             firstLaunch = keychainDate
         } else if let legacyDate = defaults.object(forKey: firstLaunchKey) as? Date {
-            // Migrating an existing v1.0 / v1.0.1 user: move their date into
-            // the Keychain so future uninstalls don't reset their trial.
+            // Migrating an existing v1.0/v1.0.1 user: promote their date into Keychain.
             TrialKeychain.save(legacyDate)
             firstLaunch = legacyDate
         } else {
-            // True first launch (or a device whose Keychain was wiped).
+            // True first launch — stamp the date in both stores.
             let now = Date()
             TrialKeychain.save(now)
             firstLaunch = now
         }
-        // Keep UserDefaults in sync as a cache for refresh().
         defaults.set(firstLaunch, forKey: firstLaunchKey)
         refresh()
     }
@@ -102,7 +115,8 @@ final class TrialManager: ObservableObject {
     private func isDevAccount() -> Bool {
         let email = (defaults.string(forKey: "auth.email") ?? "").lowercased()
         let name  = (defaults.string(forKey: "auth.displayName") ?? "").lowercased()
-        return email.contains("sameet_kulria") || name == "sameet kulria"
+        return email.contains("sameet_kulria")
+            || name == "sameet kulria"
     }
 
     /// Recompute trial state. Call on launch and when returning to foreground.

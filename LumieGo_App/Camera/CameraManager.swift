@@ -199,6 +199,7 @@ enum RecordingTag: String {
     case landscape = "16:9"
     case pip       = "PiP"
     case front     = "Front"
+    case photo     = "Photo"
 
     var shortLabel: String { rawValue }
 
@@ -208,6 +209,7 @@ enum RecordingTag: String {
         case .landscape: return "rectangle.landscape"
         case .pip:       return "square.on.square"
         case .front:     return "person.crop.square"
+        case .photo:     return "camera.fill"
         }
     }
 }
@@ -221,7 +223,69 @@ struct RecordingItem: Identifiable {
     var tag: RecordingTag = .portrait
 }
 
+/// White-balance preset applied to the active camera device.
+enum WhiteBalancePreset: String, CaseIterable {
+    case auto        = "Auto"
+    case sunny       = "Sunny"
+    case cloudy      = "Cloudy"
+    case tungsten    = "Tungsten"
+    case fluorescent = "Fluorescent"
+
+    /// Target Kelvin temperature, or nil for continuous auto white balance.
+    var kelvin: Float? {
+        switch self {
+        case .auto:        return nil
+        case .sunny:       return 5500
+        case .cloudy:      return 6500
+        case .tungsten:    return 3200
+        case .fluorescent: return 4000
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .auto:        return "a.circle"
+        case .sunny:       return "sun.max"
+        case .cloudy:      return "cloud"
+        case .tungsten:    return "lightbulb"
+        case .fluorescent: return "light.cylindrical.ceiling"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .auto:        return "AWB"
+        case .sunny:       return "5500K"
+        case .cloudy:      return "6500K"
+        case .tungsten:    return "3200K"
+        case .fluorescent: return "4000K"
+        }
+    }
+}
+
+/// Anti-flicker power-line frequency. Constrains frame duration so shutter speeds
+/// align with the local mains frequency, reducing banding under artificial light.
+enum AntiFlicker: String, CaseIterable {
+    case auto = "Auto"
+    case hz50 = "50 Hz"
+    case hz60 = "60 Hz"
+}
+
+/// A resolved audio input choice shown in the picker.
+struct AudioInputOption: Identifiable, Equatable {
+    let id: String      // AVAudioSessionPortDescription.uid
+    let name: String
+}
+
 // MARK: - CameraManager
+
+/// Holds only the rapidly-changing state during an active recording.
+/// Isolated so AudioMeter and the timer display observe it independently,
+/// preventing re-renders of unrelated UI (top bar, zoom pills, layout buttons) at 4Hz.
+final class RecordingLiveState: ObservableObject {
+    @Published var audioLevel: Float = 0
+    @Published var duration: TimeInterval = 0
+}
 
 final class CameraManager: NSObject, ObservableObject {
 
@@ -232,7 +296,7 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var videoQuality: VideoQuality = .p1080
     @Published var frameRate: FrameRate = .fps30
     @Published var isRecording = false
-    @Published var recordingDuration: TimeInterval = 0
+    let liveState = RecordingLiveState()
     @Published var isMultiCamSupported = false
     @Published var isFlashOn = false
     @Published var currentZoom: CGFloat = 1.0
@@ -248,11 +312,46 @@ final class CameraManager: NSObject, ObservableObject {
         didSet { frameRate = preset.frameRate }
     }
     @Published var lastCapturedPhoto: UIImage?  // for the shutter flash / quick review
-    @Published var audioLevel: Float = 0         // 0...1 live mic level while recording
+    // audioLevel and recordingDuration live in liveState (separate ObservableObject)
+    @Published var thermalState: ProcessInfo.ThermalState = ProcessInfo.processInfo.thermalState
+    @Published var whiteBalance: WhiteBalancePreset = .auto
+    @Published var antiFlicker: AntiFlicker = .auto {
+        didSet { applyAntiFlicker() }
+    }
+    @Published var isFocusLocked: Bool = false
+    @Published var minZoom: CGFloat = 1.0         // <1.0 when an ultra-wide virtual device is active
+    @Published var volumeShutterFired: Int = 0    // incremented on each volume-button press; observed in the UI
+    @Published var volumeShutterEnabled: Bool =
+        UserDefaults.standard.bool(forKey: "lumiego.volumeShutter") {
+        didSet {
+            UserDefaults.standard.set(volumeShutterEnabled, forKey: "lumiego.volumeShutter")
+            volumeShutterEnabled ? setupVolumeShutter() : teardownVolumeShutter()
+        }
+    }
     @Published var frontMirrored: Bool = true
     @Published var saveBothFormats: Bool = false
     @Published var savedRecordings: [RecordingItem] = []
     @Published var error: String?
+
+    // MARK: Pause / Resume
+    @Published var isPaused = false
+
+    // MARK: Manual Exposure
+    @Published var isManualExposure = false
+    @Published var manualISO: Float = 200
+    @Published var manualShutterDenom: Float = 60    // represents 1/N seconds
+    @Published var isoRange: ClosedRange<Float>      = 25...3200
+    @Published var shutterRange: ClosedRange<Float>  = 4...4000   // denominator range
+
+    // MARK: Clip duration limit
+    @Published var clipDurationLimit: TimeInterval =
+        UserDefaults.standard.double(forKey: "lumiego.clipLimit") {
+        didSet { UserDefaults.standard.set(clipDurationLimit, forKey: "lumiego.clipLimit") }
+    }
+
+    // MARK: Audio input selection
+    @Published var audioInputOptions: [AudioInputOption] = []
+    @Published var selectedAudioUID: String = ""
 
     /// Where new recordings are saved. The clip is always also kept in the app library.
     @Published var saveDestination: SaveDestination =
@@ -331,8 +430,21 @@ final class CameraManager: NSObject, ObservableObject {
     private var sessionStartTime: CMTime?
     private var currentURL: URL?
     private var recordingTimer: Timer?
-    private var isWriting = false   // accessed on syncQueue only
+    private var recordingStartDate: Date?   // wall-clock start for accurate duration without 20fps @Published churn
+    private var lastVolume: Float = 0.5
+    private var volumeObservation: NSKeyValueObservation?
+    private var isWriting = false           // accessed on syncQueue only
     private var lastFront: CVPixelBuffer?   // most recent front frame, reused if one is dropped
+
+    // Pause/resume — syncQueue-only vars track CMTime offset so timestamps are seamless
+    private var isRecordingPaused   = false
+    private var pauseStartWall:      Date?
+    private var totalPausedDuration: CMTime = .zero
+    // Main-thread mirror of paused wall-clock time used by the UI timer
+    private var pauseMainStart:      Date?
+    private var totalMainPausedSecs: TimeInterval = 0
+
+    private var zoomRampTimer: Timer?
 
     // Captured at stopRecording() so addLocalRecording() can tag clips correctly
     private var lastRecordedPipMode:     PiPMode              = .back
@@ -356,6 +468,8 @@ final class CameraManager: NSObject, ObservableObject {
     private let sessionQueue = DispatchQueue(label: "cam.session", qos: .userInitiated)
     private let syncQueue    = DispatchQueue(label: "cam.sync",    qos: .userInteractive)
     private let ciContext    = CIContext(options: [.useSoftwareRenderer: false])
+    // Cache the rounded-square mask so we don't rebuild a CGContext every frame.
+    private var pipSquareMaskCache: (side: CGFloat, image: CIImage)?
 
     // MARK: - Permissions & Start
 
@@ -383,8 +497,10 @@ final class CameraManager: NSObject, ObservableObject {
         } else {
             setupSingleCam()
         }
+        let detectedMinZoom = backInput?.device.minAvailableVideoZoomFactor ?? 1.0
         session.commitConfiguration()
         session.startRunning()
+        DispatchQueue.main.async { self.minZoom = detectedMinZoom }
 
         // Recover from interruptions (phone calls, Control Center, other camera use).
         let nc = NotificationCenter.default
@@ -392,6 +508,21 @@ final class CameraManager: NSObject, ObservableObject {
                        name: .AVCaptureSessionRuntimeError, object: session)
         nc.addObserver(self, selector: #selector(handleSessionInterruption(_:)),
                        name: .AVCaptureSessionInterruptionEnded, object: session)
+
+        // Thermal monitoring — reduce compositing work when the device heats up.
+        nc.addObserver(self, selector: #selector(handleThermalChange),
+                       name: ProcessInfo.thermalStateDidChangeNotification, object: nil)
+
+        // Audio input — populate available inputs and refresh when the route changes (e.g. AirPods connect).
+        nc.addObserver(self, selector: #selector(handleAudioRouteChange),
+                       name: AVAudioSession.routeChangeNotification, object: nil)
+        refreshAudioInputs()
+    }
+
+    @objc private func handleAudioRouteChange() { refreshAudioInputs() }
+
+    @objc private func handleThermalChange() {
+        DispatchQueue.main.async { self.thermalState = ProcessInfo.processInfo.thermalState }
     }
 
     @objc private func handleSessionInterruption(_ note: Notification) {
@@ -519,10 +650,16 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     private func setupSingleCam() {
-        guard
-            let backDev = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
-            let bIn = try? AVCaptureDeviceInput(device: backDev),
-            session.canAddInput(bIn)
+        // Prefer virtual devices (triple > dual-wide > wide) so 0.5× zoom is available
+        // on iPhones with an ultra-wide lens. Virtual devices unify all lenses behind one
+        // zoom factor axis, giving seamless optical zoom from ~0.5× to max telephoto.
+        let backDev: AVCaptureDevice? =
+            AVCaptureDevice.default(.builtInTripleCamera,    for: .video, position: .back) ??
+            AVCaptureDevice.default(.builtInDualWideCamera,  for: .video, position: .back) ??
+            AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+        guard let backDev,
+              let bIn = try? AVCaptureDeviceInput(device: backDev),
+              session.canAddInput(bIn)
         else { return }
 
         session.addInput(bIn)
@@ -631,6 +768,12 @@ final class CameraManager: NSObject, ObservableObject {
         return CGSize(width: max(b.width, b.height), height: min(b.width, b.height))
     }
 
+    /// Dual mode writes two simultaneous clips (portrait + landscape) per frame.
+    /// Capped at 720p regardless of quality setting so the sync queue can sustain
+    /// two GPU renders at 30 fps without backing up and dropping frames.
+    private var dualPortraitSize:  CGSize { CGSize(width: 720,  height: 1280) }
+    private var dualLandscapeSize: CGSize { CGSize(width: 1280, height: 720)  }
+
     func startRecording() {
       syncQueue.async { [self] in
         let stamp = Int(Date().timeIntervalSince1970)
@@ -662,12 +805,14 @@ final class CameraManager: NSObject, ObservableObject {
 
         do {
             if dualFrame {
+                // Use 720p for dual clips — two simultaneous renders per frame at higher
+                // resolutions saturate the sync queue and cause progressive lag.
                 if let pc = ClipWriter(url: outputURL(stamp: stamp, suffix: "_portrait"),
-                                       size: portraitSize, format: videoFormat, bitrate: videoQuality.bitrate) {
+                                       size: dualPortraitSize, format: videoFormat, bitrate: videoQuality.bitrate) {
                     pc.start(); portraitClip = pc
                 }
                 if let lc = ClipWriter(url: outputURL(stamp: stamp, suffix: "_landscape"),
-                                       size: landscapeSize, format: videoFormat, bitrate: videoQuality.bitrate) {
+                                       size: dualLandscapeSize, format: videoFormat, bitrate: videoQuality.bitrate) {
                     lc.start(); landscapeClip = lc
                 }
             }
@@ -724,11 +869,28 @@ final class CameraManager: NSObject, ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 isRecording = true
-                recordingDuration = 0
-                recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-                    guard let self else { return }
-                    self.recordingDuration += 0.05
-                    self.audioLevel = self.currentAudioLevel()
+                isPaused = false
+                liveState.duration = 0
+                liveState.audioLevel = 0
+                recordingStartDate = Date()
+                totalMainPausedSecs = 0
+                pauseMainStart = nil
+                UIApplication.shared.isIdleTimerDisabled = true   // keep screen on while recording
+                // Fire at 4fps; duration is timestamp-based so accuracy is unchanged.
+                // liveState is a separate ObservableObject, so only AudioMeter/RecTimerView re-render.
+                recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                    guard let self, let start = self.recordingStartDate, !self.isPaused else { return }
+                    let elapsed = Date().timeIntervalSince(start) - self.totalMainPausedSecs
+                    self.liveState.duration = max(0, elapsed)
+                    let newLevel = self.currentAudioLevel()
+                    // Only publish when a VU bar changes state (1 bar = 1/16 ≈ 0.0625)
+                    if abs(newLevel - self.liveState.audioLevel) >= 0.0625 {
+                        self.liveState.audioLevel = newLevel
+                    }
+                    // Auto-stop when clip duration limit is reached
+                    if self.clipDurationLimit > 0, elapsed >= self.clipDurationLimit {
+                        self.stopRecording()
+                    }
                 }
             }
         } catch {
@@ -738,15 +900,23 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     func stopRecording() {
-        let dur = recordingDuration   // read main-thread state before hopping queues
+        let dur = liveState.duration   // read main-thread state before hopping queues
         lastRecordedPipMode     = pipMode
         lastRecordedOrientation = recordingOrientation
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             isRecording = false
+            isPaused = false
+            recordingStartDate = nil
             recordingTimer?.invalidate()
             recordingTimer = nil
-            audioLevel = 0
+            liveState.audioLevel = 0
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
+        syncQueue.async { [self] in
+            isRecordingPaused = false
+            pauseStartWall = nil
+            totalPausedDuration = .zero
         }
 
         // Finish the writers on the capture queue so writer state is never touched concurrently.
@@ -916,7 +1086,10 @@ final class CameraManager: NSObject, ObservableObject {
 
     /// Applies the active creator preset's color grade. Operates on the merged
     /// composite only - raw separate clips remain ungraded for editing.
+    /// Skipped automatically when the device is thermally throttling to reduce CPU load.
     private func applyGrade(_ image: CIImage) -> CIImage {
+        guard preset != .none,
+              thermalState != .serious, thermalState != .critical else { return image }
         switch preset {
         case .none:
             return image
@@ -969,6 +1142,15 @@ final class CameraManager: NSObject, ObservableObject {
                     kCIInputBackgroundImageKey: clear
                 ])
             }
+        } else {
+            // Rounded corners for the square bubble — match the on-screen SwiftUI preview shape.
+            if let mask = roundedSquareMask(side: side) {
+                let clear = CIImage(color: .clear).cropped(to: CGRect(x: 0, y: 0, width: side, height: side))
+                scaled = scaled.applyingFilter("CIBlendWithMask", parameters: [
+                    kCIInputMaskImageKey: mask,
+                    kCIInputBackgroundImageKey: clear
+                ])
+            }
         }
 
         // Place the bubble where the user dragged it. pipNorm is the bubble's top-left as a
@@ -979,6 +1161,31 @@ final class CameraManager: NSObject, ObservableObject {
         let topY = pipNorm.y * outputSize.height
         let ty = (outputSize.height - topY - side).clamped(to: 0...maxY)
         return scaled.transformed(by: CGAffineTransform(translationX: tx, y: ty))
+    }
+
+    /// Builds a grayscale rounded-rectangle mask matching the on-screen SwiftUI bubble shape.
+    /// Result is cached by side length — rebuilding a CGContext every frame at 30fps is too costly.
+    private func roundedSquareMask(side: CGFloat) -> CIImage? {
+        if let cached = pipSquareMaskCache, cached.side == side { return cached.image }
+        let intSide = Int(side)
+        let colorSpace = CGColorSpaceCreateDeviceGray()
+        guard let ctx = CGContext(data: nil,
+                                  width: intSide, height: intSide,
+                                  bitsPerComponent: 8, bytesPerRow: intSide,
+                                  space: colorSpace,
+                                  bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+        let radius = side * 0.14   // ~matches cornerRadius:16 on a ~117pt SwiftUI bubble
+        ctx.setFillColor(gray: 0, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        ctx.setFillColor(gray: 1, alpha: 1)
+        let path = CGPath(roundedRect: CGRect(x: 0, y: 0, width: side, height: side),
+                          cornerWidth: radius, cornerHeight: radius, transform: nil)
+        ctx.addPath(path)
+        ctx.fillPath()
+        guard let cgImage = ctx.makeImage() else { return nil }
+        let mask = CIImage(cgImage: cgImage)
+        pipSquareMaskCache = (side: side, image: mask)
+        return mask
     }
 
     private func scaleToFill(_ image: CIImage, to size: CGSize) -> CIImage {
@@ -1083,11 +1290,18 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     func setZoom(_ factor: CGFloat) {
-        guard let device = backInput?.device, (try? device.lockForConfiguration()) != nil else { return }
-        let clamped = factor.clamped(to: 1.0...device.maxAvailableVideoZoomFactor)
+        guard let device = backInput?.device else { return }
+        let clamped = factor.clamped(to: device.minAvailableVideoZoomFactor...device.maxAvailableVideoZoomFactor)
+        // Skip lockForConfiguration when the change is negligible - avoids overhead during fast pinch
+        guard abs(clamped - device.videoZoomFactor) > 0.04 else { return }
+        guard (try? device.lockForConfiguration()) != nil else { return }
         device.videoZoomFactor = clamped
         device.unlockForConfiguration()
-        DispatchQueue.main.async { self.currentZoom = factor }
+        // Quantize to 0.1 steps so the zoom pills don't re-render on every gesture frame
+        let quantized = (clamped * 10).rounded() / 10
+        if abs(quantized - currentZoom) > 0.04 {
+            DispatchQueue.main.async { self.currentZoom = quantized }
+        }
     }
 
     func toggleFlash() {
@@ -1112,6 +1326,79 @@ final class CameraManager: NSObject, ObservableObject {
         if dev.isFocusPointOfInterestSupported    { dev.focusPointOfInterest = dp; dev.focusMode = .autoFocus }
         if dev.isExposurePointOfInterestSupported  { dev.exposurePointOfInterest = dp; dev.exposureMode = .autoExpose }
         dev.unlockForConfiguration()
+        DispatchQueue.main.async { self.isFocusLocked = false }
+    }
+
+    func lockFocus() {
+        guard let dev = focusDevice, (try? dev.lockForConfiguration()) != nil else { return }
+        if dev.isFocusModeSupported(.locked) { dev.focusMode = .locked }
+        dev.unlockForConfiguration()
+        DispatchQueue.main.async { self.isFocusLocked = true }
+    }
+
+    func unlockFocus() {
+        guard let dev = focusDevice, (try? dev.lockForConfiguration()) != nil else { return }
+        if dev.isFocusModeSupported(.continuousAutoFocus) { dev.focusMode = .continuousAutoFocus }
+        dev.unlockForConfiguration()
+        DispatchQueue.main.async { self.isFocusLocked = false }
+    }
+
+    func setWhiteBalance(_ preset: WhiteBalancePreset) {
+        guard let device = focusDevice, (try? device.lockForConfiguration()) != nil else { return }
+        if let kelvin = preset.kelvin {
+            let tnt = AVCaptureDevice.WhiteBalanceTemperatureAndTintValues(temperature: kelvin, tint: 0)
+            var gains = device.deviceWhiteBalanceGains(for: tnt)
+            let maxGain = device.maxWhiteBalanceGain
+            gains.redGain   = min(max(1.0, gains.redGain),   maxGain)
+            gains.greenGain = min(max(1.0, gains.greenGain), maxGain)
+            gains.blueGain  = min(max(1.0, gains.blueGain),  maxGain)
+            if device.isWhiteBalanceModeSupported(.locked) {
+                device.setWhiteBalanceModeLocked(with: gains, completionHandler: nil)
+            }
+        } else if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+            device.whiteBalanceMode = .continuousAutoWhiteBalance
+        }
+        device.unlockForConfiguration()
+        DispatchQueue.main.async { self.whiteBalance = preset }
+    }
+
+    func applyAntiFlicker() {
+        sessionQueue.async { [weak self] in
+            guard let self, let device = self.backInput?.device,
+                  (try? device.lockForConfiguration()) != nil else { return }
+            switch self.antiFlicker {
+            case .auto:
+                device.activeVideoMinFrameDuration = .invalid
+                device.activeVideoMaxFrameDuration = .invalid
+            case .hz50:
+                // Constrain to 25–50 fps so sensor exposure aligns with 50 Hz power line cycles
+                device.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: 50)
+                device.activeVideoMaxFrameDuration = CMTimeMake(value: 1, timescale: 25)
+            case .hz60:
+                // Constrain to 30–60 fps for 60 Hz power line cycles
+                device.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: 60)
+                device.activeVideoMaxFrameDuration = CMTimeMake(value: 1, timescale: 30)
+            }
+            device.unlockForConfiguration()
+        }
+    }
+
+    private func setupVolumeShutter() {
+        let audioSession = AVAudioSession.sharedInstance()
+        try? audioSession.setActive(true)
+        lastVolume = audioSession.outputVolume
+        volumeObservation = audioSession.observe(\.outputVolume, options: [.new]) { [weak self] session, _ in
+            guard let self else { return }
+            let current = session.outputVolume
+            guard abs(current - self.lastVolume) > 0.02 else { return }
+            self.lastVolume = current
+            DispatchQueue.main.async { self.volumeShutterFired &+= 1 }
+        }
+    }
+
+    private func teardownVolumeShutter() {
+        volumeObservation?.invalidate()
+        volumeObservation = nil
     }
 
     /// Manual exposure (brightness) bias in EV, driven by the focus reticle's vertical slider.
@@ -1120,6 +1407,110 @@ final class CameraManager: NSObject, ObservableObject {
         let clamped = max(dev.minExposureTargetBias, min(dev.maxExposureTargetBias, ev))
         dev.setExposureTargetBias(clamped, completionHandler: nil)
         dev.unlockForConfiguration()
+    }
+
+    // MARK: - Pause / Resume
+
+    func pauseRecording() {
+        guard isRecording, !isPaused else { return }
+        syncQueue.async { [self] in
+            guard !isRecordingPaused else { return }
+            isRecordingPaused = true
+            pauseStartWall = Date()
+        }
+        pauseMainStart = Date()
+        isPaused = true
+    }
+
+    func resumeRecording() {
+        guard isRecording, isPaused else { return }
+        let wallElapsed = pauseMainStart.map { Date().timeIntervalSince($0) } ?? 0
+        totalMainPausedSecs += wallElapsed
+        pauseMainStart = nil
+        isPaused = false
+        syncQueue.async { [self] in
+            guard isRecordingPaused, let start = pauseStartWall else { return }
+            let secs = Date().timeIntervalSince(start)
+            totalPausedDuration = CMTimeAdd(totalPausedDuration,
+                                            CMTimeMakeWithSeconds(secs, preferredTimescale: 600))
+            pauseStartWall = nil
+            isRecordingPaused = false
+        }
+    }
+
+    // MARK: - Manual Exposure
+
+    func enableManualExposure() {
+        guard let dev = focusDevice else { return }
+        let fmt = dev.activeFormat
+        let minISO = fmt.minISO, maxISO = fmt.maxISO
+        let minDur = fmt.minExposureDuration, maxDur = fmt.maxExposureDuration
+        let currentISO  = dev.iso
+        let currentDenom = Float(1.0 / CMTimeGetSeconds(dev.exposureDuration))
+        let safeMin = max(4, Float(1.0 / CMTimeGetSeconds(maxDur)))
+        let safeMax = min(4000, Float(1.0 / CMTimeGetSeconds(minDur)))
+        DispatchQueue.main.async {
+            self.isoRange           = minISO...maxISO
+            self.shutterRange       = safeMin...safeMax
+            self.manualISO          = currentISO.clamped(to: minISO...maxISO)
+            self.manualShutterDenom = currentDenom.clamped(to: safeMin...safeMax)
+            self.isManualExposure   = true
+        }
+        applyManualExposure()
+    }
+
+    func disableManualExposure() {
+        guard let dev = focusDevice, (try? dev.lockForConfiguration()) != nil else { return }
+        dev.exposureMode = .continuousAutoExposure
+        dev.unlockForConfiguration()
+        DispatchQueue.main.async { self.isManualExposure = false }
+    }
+
+    func applyManualExposure() {
+        guard isManualExposure, let dev = focusDevice,
+              (try? dev.lockForConfiguration()) != nil else { return }
+        let duration = CMTimeMakeWithSeconds(Double(1.0 / manualShutterDenom), preferredTimescale: 1_000_000)
+        dev.setExposureModeCustom(duration: duration, iso: manualISO, completionHandler: nil)
+        dev.unlockForConfiguration()
+    }
+
+    // MARK: - Smooth Zoom
+
+    func rampToZoom(_ factor: CGFloat) {
+        guard let device = backInput?.device, (try? device.lockForConfiguration()) != nil else { return }
+        let clamped = factor.clamped(to: device.minAvailableVideoZoomFactor...device.maxAvailableVideoZoomFactor)
+        device.ramp(toVideoZoomFactor: clamped, withRate: 3.5)
+        device.unlockForConfiguration()
+        // Poll while ramping so zoom pills and currentZoom stay in sync
+        zoomRampTimer?.invalidate()
+        zoomRampTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] t in
+            guard let self, let dev = self.backInput?.device else { t.invalidate(); return }
+            let z = dev.videoZoomFactor
+            let q = (z * 10).rounded() / 10
+            DispatchQueue.main.async { self.currentZoom = q }
+            if abs(z - clamped) < 0.05 { t.invalidate() }
+        }
+    }
+
+    // MARK: - Audio Input Selection
+
+    func refreshAudioInputs() {
+        let session = AVAudioSession.sharedInstance()
+        let options = (session.availableInputs ?? []).map { AudioInputOption(id: $0.uid, name: $0.portName) }
+        let activeUID = session.currentRoute.inputs.first?.uid ?? ""
+        DispatchQueue.main.async {
+            self.audioInputOptions = options
+            if self.selectedAudioUID.isEmpty || !options.map(\.id).contains(self.selectedAudioUID) {
+                self.selectedAudioUID = activeUID
+            }
+        }
+    }
+
+    func selectAudioInput(uid: String) {
+        let session = AVAudioSession.sharedInstance()
+        guard let port = session.availableInputs?.first(where: { $0.uid == uid }) else { return }
+        try? session.setPreferredInput(port)
+        DispatchQueue.main.async { self.selectedAudioUID = uid }
     }
 
     func deleteRecording(_ item: RecordingItem) {
@@ -1160,12 +1551,28 @@ final class CameraManager: NSObject, ObservableObject {
         let first = images.first
         DispatchQueue.main.async { self.lastCapturedPhoto = first }
 
+        // Add each captured image to the in-app gallery so it appears in RecordingsView.
+        let stamp = Int(Date().timeIntervalSince1970)
+        for (i, img) in images.enumerated() {
+            addPhotoToAppLibrary(img, stamp: stamp + i, suffix: images.count > 1 ? "_\(i + 1)" : "")
+        }
+
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
             guard status == .authorized || status == .limited else { return }
             PHPhotoLibrary.shared().performChanges {
                 for img in images { PHAssetChangeRequest.creationRequestForAsset(from: img) }
             }
         }
+    }
+
+    private func addPhotoToAppLibrary(_ image: UIImage, stamp: Int, suffix: String) {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let url = docs.appendingPathComponent("LumieGo_\(stamp)\(suffix).jpg")
+        guard let data = image.jpegData(compressionQuality: 0.92),
+              (try? data.write(to: url)) != nil else { return }
+        let item = RecordingItem(url: url, date: Date(), duration: 0, thumbnail: image, tag: .photo)
+        DispatchQueue.main.async { self.savedRecordings.insert(item, at: 0) }
     }
 
     private func uiImage(from buffer: CVPixelBuffer) -> UIImage? {
@@ -1192,12 +1599,29 @@ extension CameraManager {
     /// Appends an audio sample to every active writer. Shared by multi-cam and single-cam paths.
     /// Audio never starts the session - it only writes once a video frame has started it.
     private func appendAudioToWriters(_ sample: CMSampleBuffer) {
-        guard isWriting, sessionStartTime != nil else { return }
-        _ = audioIn?.append(sample)
-        backClip?.appendAudio(sample)
-        frontClip?.appendAudio(sample)
-        portraitClip?.appendAudio(sample)
-        landscapeClip?.appendAudio(sample)
+        guard isWriting, sessionStartTime != nil, !isRecordingPaused else { return }
+        let adjusted = retimed(sample, offset: totalPausedDuration) ?? sample
+        _ = audioIn?.append(adjusted)
+        backClip?.appendAudio(adjusted)
+        frontClip?.appendAudio(adjusted)
+        portraitClip?.appendAudio(adjusted)
+        landscapeClip?.appendAudio(adjusted)
+    }
+
+    /// Returns a copy of the sample buffer with its presentation timestamp shifted back by `offset`.
+    private func retimed(_ sample: CMSampleBuffer, offset: CMTime) -> CMSampleBuffer? {
+        guard CMTimeCompare(offset, .zero) != 0 else { return sample }
+        var timing = CMSampleTimingInfo(
+            duration:               CMSampleBufferGetDuration(sample),
+            presentationTimeStamp:  CMTimeSubtract(CMSampleBufferGetPresentationTimeStamp(sample), offset),
+            decodeTimeStamp:        .invalid
+        )
+        var out: CMSampleBuffer?
+        CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: sample,
+                                              sampleTimingEntryCount: 1,
+                                              sampleTimingArray: &timing,
+                                              sampleBufferOut: &out)
+        return out
     }
 }
 
@@ -1230,9 +1654,10 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate,
             captureLayoutPhoto(back: backBuf, front: frontBuf)
         }
 
-        guard isWriting else { return }
+        guard isWriting, !isRecordingPaused else { return }
 
-        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let rawPTS = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let pts    = CMTimeSubtract(rawPTS, totalPausedDuration)
         startSessionsIfNeeded(at: pts)
 
         // Merged composite (both cameras → one video for Standard/PiP layouts)
@@ -1241,11 +1666,15 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate,
             adpt.append(composited, withPresentationTime: pts)
         }
 
-        // Dual layout: back camera → portrait (9:16) + landscape (16:9)
-        if let pc = portraitClip, pc.isWriting, let p = renderBackToSize(backBuf, size: portraitSize) {
+        // Dual layout: back camera → portrait (9:16) + landscape (16:9).
+        // Check isReadyForVideo before rendering to avoid wasted GPU work when the
+        // writer is backed up — lets the queue shed load naturally instead of piling up.
+        if let pc = portraitClip, pc.isWriting, pc.isReadyForVideo,
+           let p = renderBackToSize(backBuf, size: dualPortraitSize) {
             pc.appendVideo(p, at: pts)
         }
-        if let lc = landscapeClip, lc.isWriting, let l = renderBackToSize(backBuf, size: landscapeSize) {
+        if let lc = landscapeClip, lc.isWriting, lc.isReadyForVideo,
+           let l = renderBackToSize(backBuf, size: dualLandscapeSize) {
             lc.appendVideo(l, at: pts)
         }
 
@@ -1309,6 +1738,7 @@ final class ClipWriter {
     }
 
     var isWriting: Bool { writer.status == .writing }
+    var isReadyForVideo: Bool { videoInput.isReadyForMoreMediaData }
 
     func start() { writer.startWriting() }
 

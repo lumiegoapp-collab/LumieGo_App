@@ -5,6 +5,7 @@ import AVKit
 
 enum RecordingCategory: String, CaseIterable {
     case all       = "All"
+    case photo     = "Photos"
     case portrait  = "Portrait"
     case landscape = "Landscape"
     case pip       = "PiP"
@@ -13,6 +14,7 @@ enum RecordingCategory: String, CaseIterable {
     var icon: String {
         switch self {
         case .all:       return "square.grid.2x2"
+        case .photo:     return "camera.fill"
         case .portrait:  return "iphone"
         case .landscape: return "rectangle.landscape"
         case .pip:       return "square.on.square"
@@ -23,6 +25,7 @@ enum RecordingCategory: String, CaseIterable {
     func matches(_ tag: RecordingTag) -> Bool {
         switch self {
         case .all:       return true
+        case .photo:     return tag == .photo
         case .portrait:  return tag == .portrait
         case .landscape: return tag == .landscape
         case .pip:       return tag == .pip
@@ -38,6 +41,7 @@ struct RecordingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var playerItem:  RecordingItem?
+    @State private var photoItem:   RecordingItem?
     @State private var deleteItem:  RecordingItem?
     @State private var shareURL:    URL?
     @State private var exportURL:   URL?
@@ -87,7 +91,7 @@ struct RecordingsView: View {
                         .fontWeight(.semibold)
                 }
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Text("\(filtered.count) \(filtered.count == 1 ? "clip" : "clips")")
+                    Text("\(filtered.count) \(filtered.count == 1 ? "item" : "items")")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -95,6 +99,9 @@ struct RecordingsView: View {
         }
         .sheet(item: $playerItem) { item in
             GalleryPlayerView(item: item)
+        }
+        .sheet(item: $photoItem) { item in
+            GalleryPhotoView(item: item)
         }
         .sheet(item: Binding(
             get: { shareURL.map  { ShareWrapper(url: $0) } },
@@ -144,8 +151,11 @@ struct RecordingsView: View {
             LazyVGrid(columns: columns, spacing: gap) {
                 ForEach(filtered) { item in
                     GalleryCell(item: item)
-                        .onTapGesture { playerItem = item }
-                        .contextMenu  { contextMenu(for: item) }
+                        .onTapGesture {
+                            if item.tag == .photo { photoItem = item }
+                            else { playerItem = item }
+                        }
+                        .contextMenu { contextMenu(for: item) }
                 }
             }
             .padding(.top, gap)
@@ -156,14 +166,20 @@ struct RecordingsView: View {
 
     @ViewBuilder
     private func contextMenu(for item: RecordingItem) -> some View {
-        Button { playerItem = item } label: {
-            Label("Play", systemImage: "play.fill")
+        if item.tag == .photo {
+            Button { photoItem = item } label: {
+                Label("View Photo", systemImage: "photo")
+            }
+        } else {
+            Button { playerItem = item } label: {
+                Label("Play", systemImage: "play.fill")
+            }
+            Button { exportURL = item.url } label: {
+                Label("Export to Files", systemImage: "folder")
+            }
         }
         Button { shareURL = item.url } label: {
             Label("Share", systemImage: "square.and.arrow.up")
-        }
-        Button { exportURL = item.url } label: {
-            Label("Export to Files", systemImage: "folder")
         }
         Divider()
         Button(role: .destructive) { deleteItem = item } label: {
@@ -194,10 +210,12 @@ struct RecordingsView: View {
             Image(systemName: selectedCategory.icon)
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
-            Text("No \(selectedCategory.rawValue) clips")
+            Text("No \(selectedCategory.rawValue)")
                 .font(.headline)
                 .foregroundColor(.white)
-            Text("Record in \(selectedCategory.rawValue.lowercased()) mode to see clips here.")
+            Text(selectedCategory == .photo
+                 ? "Your photos will appear here after capturing in photo mode."
+                 : "Record in \(selectedCategory.rawValue.lowercased()) mode to see clips here.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -291,6 +309,7 @@ struct GalleryCell: View {
     }
 
     private var durationText: String {
+        if item.tag == .photo { return "Photo" }
         let m = Int(item.duration) / 60
         let s = Int(item.duration) % 60
         return String(format: "%d:%02d", m, s)
@@ -308,6 +327,7 @@ struct TagBadge: View {
         case .landscape: return Color(red: 0.3, green: 0.9, blue: 1.0)
         case .pip:       return Color(red: 0.75, green: 0.5, blue: 1.0)
         case .front:     return .green
+        case .photo:     return Color(red: 0.9, green: 0.9, blue: 0.9)
         }
     }
 
@@ -387,4 +407,40 @@ struct DocumentExporter: UIViewControllerRepresentable {
 struct ShareWrapper: Identifiable {
     let id  = UUID()
     let url: URL
+}
+
+// MARK: - Full-screen photo viewer
+
+struct GalleryPhotoView: View {
+    let item: RecordingItem
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let img = item.thumbnail {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .ignoresSafeArea()
+            }
+            VStack {
+                HStack {
+                    Spacer()
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 36, height: 36)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                    .padding(.trailing, 16)
+                }
+                .padding(.top, 54)
+                Spacer()
+            }
+        }
+    }
 }

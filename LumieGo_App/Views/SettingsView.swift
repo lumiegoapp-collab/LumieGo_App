@@ -11,6 +11,8 @@ struct SettingsView: View {
     @State private var isDeleting = false
     @State private var showFolderPicker = false
     @State private var showPaywall = false
+    @State private var novamintTapCount = 0
+    @State private var showDevPanel = false
 
     private let privacyURL = URL(string: "https://lumiegoapp-collab.github.io/LumieGo/privacy.html")!
     private let termsURL   = URL(string: "https://lumiegoapp-collab.github.io/LumieGo/terms.html")!
@@ -80,11 +82,23 @@ struct SettingsView: View {
                     PickerRow(label: "Format", systemImage: "film", selection: $camera.videoFormat)
                     PickerRow(label: "Quality", systemImage: "4k.tv", selection: $camera.videoQuality)
                     frameRateRow()
+                    PickerRow(label: "Anti-Flicker", systemImage: "bolt.horizontal", selection: $camera.antiFlicker)
                     ToggleRow(label: "Stabilization", systemImage: "wand.and.stars", isOn: $camera.isStabilizationEnabled)
                     ToggleRow(label: "Mirror Front Camera", systemImage: "arrow.left.arrow.right", isOn: $camera.frontMirrored)
                     ToggleRow(label: "Save Both Formats", systemImage: "rectangle.portrait.on.rectangle.portrait", isOn: $camera.saveBothFormats)
+                    clipLimitRow()
                 } header: { SectionHeader("Video") } footer: {
-                    Text("Mirror Front Camera flips the selfie feed horizontally. Save Both Formats records an extra file at the alternate orientation (portrait + landscape) in every take.")
+                    Text("Anti-Flicker constrains the shutter to align with your local mains frequency (50 Hz in Europe/Asia, 60 Hz in North America), reducing banding under artificial light. Mirror Front Camera flips the selfie feed horizontally. Save Both Formats records an extra file at the alternate orientation in every take.")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                }
+
+                // MARK: Controls
+                Section {
+                    ToggleRow(label: "Volume Button Shutter", systemImage: "speaker.wave.2",
+                              isOn: $camera.volumeShutterEnabled)
+                    audioInputRow()
+                } header: { SectionHeader("Controls") } footer: {
+                    Text("Use the physical volume up or down button to start and stop recording. Microphone selects which input captures audio — useful with AirPods or a wired lav mic.")
                         .font(.system(size: 11)).foregroundColor(.secondary)
                 }
 
@@ -147,8 +161,17 @@ struct SettingsView: View {
                 // MARK: About
                 Section {
                     InfoRow(label: "App",     value: "LumieGo")
-                    InfoRow(label: "Version", value: "1.0")
-                    InfoRow(label: "Powered by", value: "Novamint Labs")
+                    InfoRow(label: "Version", value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"))")
+                    Button {
+                        novamintTapCount += 1
+                        if novamintTapCount >= 7 {
+                            novamintTapCount = 0
+                            showDevPanel = true
+                        }
+                    } label: {
+                        InfoRow(label: "Powered by", value: "Novamint Labs")
+                    }
+                    .buttonStyle(.plain)
                 } header: { SectionHeader("About") }
             }
             .listStyle(.insetGrouped)
@@ -183,6 +206,9 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showPaywall) {
                 PaywallSheet(trial: trial, isPresented: $showPaywall)
+            }
+            .sheet(isPresented: $showDevPanel) {
+                DevPanelView(camera: camera, trial: trial)
             }
         }
     }
@@ -230,7 +256,7 @@ struct PickerRow<T: RawRepresentable & CaseIterable & Hashable>: View
     }
 }
 
-// FrameRate doesn't have String raw value, so a custom version:
+// FrameRate, clip limit, and audio input need custom rows:
 extension SettingsView {
     func frameRateRow() -> some View {
         Picker(selection: $camera.frameRate) {
@@ -239,6 +265,36 @@ extension SettingsView {
             }
         } label: {
             Label("Frame Rate", systemImage: "speedometer")
+        }
+    }
+
+    func clipLimitRow() -> some View {
+        let options: [(label: String, secs: TimeInterval)] = [
+            ("Off", 0), ("30 sec", 30), ("1 min", 60), ("3 min", 180),
+            ("5 min", 300), ("10 min", 600), ("15 min", 900), ("30 min", 1800)
+        ]
+        return Picker(selection: $camera.clipDurationLimit) {
+            ForEach(options, id: \.secs) { opt in
+                Text(opt.label).tag(opt.secs)
+            }
+        } label: {
+            Label("Clip Limit", systemImage: "timer")
+        }
+    }
+
+    func audioInputRow() -> some View {
+        Picker(selection: $camera.selectedAudioUID) {
+            if camera.audioInputOptions.isEmpty {
+                Text("Built-in Mic").tag("")
+            }
+            ForEach(camera.audioInputOptions) { opt in
+                Text(opt.name).tag(opt.id)
+            }
+        } label: {
+            Label("Microphone", systemImage: "mic")
+        }
+        .onChange(of: camera.selectedAudioUID) { _, uid in
+            camera.selectAudioInput(uid: uid)
         }
     }
 }
@@ -316,5 +372,76 @@ struct SocialLayoutPicker: View {
         }
         .navigationTitle("Social Media Layout")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Developer Panel
+
+/// Hidden panel unlocked by tapping "Novamint Labs" 7 times.
+/// Shows live device/session state and, in debug builds, trial reset controls.
+struct DevPanelView: View {
+    @ObservedObject var camera: CameraManager
+    @ObservedObject var trial: TrialManager
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    InfoRow(label: "Version",
+                            value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"))")
+                    InfoRow(label: "Trial",       value: trial.isPro ? "Pro ✓" : trial.trialLabel)
+                    InfoRow(label: "Thermal",     value: thermalLabel)
+                    InfoRow(label: "Multi-Cam",   value: camera.isMultiCamSupported ? "Supported" : "Not available")
+                    InfoRow(label: "Min Zoom",    value: String(format: "%.2f×", camera.minZoom))
+                    InfoRow(label: "Format",      value: camera.videoFormat.rawValue)
+                    InfoRow(label: "Quality",     value: camera.videoQuality.rawValue)
+                    InfoRow(label: "Frame Rate",  value: camera.frameRate.label)
+                    InfoRow(label: "Recordings",  value: "\(camera.savedRecordings.count) saved")
+                } header: { SectionHeader("Session State") }
+
+                #if DEBUG
+                Section {
+                    Button("Reset Trial (fresh 3-day start)") {
+                        trial.debugResetTrial()
+                    }
+                    .foregroundColor(.orange)
+
+                    Button("Expire Trial (simulate locked)") {
+                        trial.debugExpireTrial()
+                    }
+                    .foregroundColor(.red)
+                } header: { SectionHeader("Trial") }
+
+                Section {
+                    Button("Clear Recording Library") {
+                        camera.savedRecordings.removeAll()
+                    }
+                    .foregroundColor(.red)
+                } header: { SectionHeader("Data") } footer: {
+                    Text("Removes items from the in-app list only. Files remain on disk.")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                }
+                #endif
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Developer")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var thermalLabel: String {
+        switch camera.thermalState {
+        case .nominal:  return "Nominal"
+        case .fair:     return "Fair"
+        case .serious:  return "Serious ⚠️"
+        case .critical: return "Critical 🔴"
+        @unknown default: return "Unknown"
+        }
     }
 }

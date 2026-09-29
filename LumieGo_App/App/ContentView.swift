@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import AppTrackingTransparency
 import FBSDKCoreKit
+import MediaPlayer
 
 @main
 struct LumieGoApp: App {
@@ -89,6 +90,18 @@ struct CameraPreviewView: UIViewRepresentable {
     }
 }
 
+/// An invisible MPVolumeView placed in the hierarchy to suppress the system volume HUD
+/// while the volume-button shutter is active. Must be in the window to take effect.
+struct HiddenVolumeView: UIViewRepresentable {
+    func makeUIView(context: Context) -> MPVolumeView {
+        let v = MPVolumeView(frame: .zero)
+        v.alpha = 0.001
+        v.isUserInteractionEnabled = false
+        return v
+    }
+    func updateUIView(_ uiView: MPVolumeView, context: Context) {}
+}
+
 // MARK: - Main Camera View
 
 struct MainCameraView: View {
@@ -170,20 +183,24 @@ struct MainCameraView: View {
                             scheduleFocusHide()
                         }
                 )
-                .simultaneousGesture(
+                .gesture(
                     MagnificationGesture()
                         .onChanged { val in camera.setZoom(pinchZoom * val) }
                         .onEnded   { val in pinchZoom = (pinchZoom * val).clamped(to: 1...10) }
                 )
 
-                // Tap-to-focus reticle with a vertical brightness (exposure) slider
+                // Tap-to-focus reticle with exposure slider and AF lock button
                 if showFocus {
                     FocusExposureView(
                         point: focusPoint,
                         ev: $exposureEV,
                         range: exposureRange,
                         onChange: { camera.setExposureBias($0) },
-                        onInteract: { scheduleFocusHide() }
+                        onInteract: { scheduleFocusHide() },
+                        isLocked: camera.isFocusLocked,
+                        onToggleLock: {
+                            if camera.isFocusLocked { camera.unlockFocus() } else { camera.lockFocus() }
+                        }
                     )
                     .transition(.opacity.combined(with: .scale(scale: 1.15)))
                 }
@@ -214,7 +231,8 @@ struct MainCameraView: View {
 
                 // Controls - hidden while recording for a clean shot (just stop + timer remain)
                 if camera.isRecording {
-                    RecordingHUD(camera: camera, isLandscape: isLandscape, onStop: primaryAction)
+                    RecordingHUD(camera: camera, teleprompter: teleprompter,
+                                 isLandscape: isLandscape, onStop: primaryAction)
                 } else if isLandscape {
                     // Top icons gathered into a single blurred strip at top-left
                     VStack(spacing: 0) {
@@ -247,8 +265,19 @@ struct MainCameraView: View {
                         Spacer()
                         BottomBar(camera: camera, teleprompter: teleprompter,
                                   showScriptEditor: $showScriptEditor,
-                                  onPrimaryAction: primaryAction)
+                                  onPrimaryAction: primaryAction,
+                                  onShowRecordings: { showRecordings = true })
                     }
+                }
+
+                // Manual exposure sliders — floats above the controls when active
+                if camera.isManualExposure, !camera.isRecording {
+                    VStack {
+                        Spacer()
+                        ManualExposurePanel(camera: camera)
+                            .padding(.bottom, isLandscape ? 16 : 160)
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
                 // Teleprompter overlay (the headline feature) - above the controls so its
@@ -282,6 +311,13 @@ struct MainCameraView: View {
                 if showShutterFlash {
                     Color.white.ignoresSafeArea().allowsHitTesting(false)
                 }
+
+                // Suppresses the system volume HUD when volume-button shutter is enabled
+                if camera.volumeShutterEnabled {
+                    HiddenVolumeView()
+                        .frame(width: 1, height: 1)
+                        .allowsHitTesting(false)
+                }
             }
         }
         .ignoresSafeArea()
@@ -311,7 +347,18 @@ struct MainCameraView: View {
         )) {
             PaywallView(trial: trial)
         }
-        .onAppear { camera.requestPermissions() }
+        .onAppear {
+            camera.requestPermissions()
+            trial.refresh()   // resolve dev-bypass before the paywall gate evaluates
+        }
+        .onChange(of: camera.volumeShutterFired) { _, _ in
+            guard camera.volumeShutterEnabled else { return }
+            primaryAction()
+        }
+        // Keep screen on while in photo mode (user may be framing a shot for a while).
+        .onChange(of: camera.captureMode) { _, mode in
+            UIApplication.shared.isIdleTimerDisabled = (mode == .photo)
+        }
         .task {
             // Sync the live subscription entitlement so subscribers stay unlocked
             // and lapsed subscriptions re-lock after the trial.
@@ -395,7 +442,7 @@ struct TopBar: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // Left controls — grid, countdown
+            // Left controls — grid, countdown, white balance, manual exposure toggle
             HStack(spacing: 4) {
                 ControlButton(icon: "grid",
                               tint: camera.showGrid ? .yellow : .white) {
@@ -420,14 +467,63 @@ struct TopBar: View {
                     }
                     .frame(width: 38, height: 38)
                 }
+                // White balance cycle: Auto → Sunny → Cloudy → Tungsten → Fluorescent → Auto
+                Button {
+                    let all = WhiteBalancePreset.allCases
+                    let idx = all.firstIndex(of: camera.whiteBalance) ?? 0
+                    camera.setWhiteBalance(all[(idx + 1) % all.count])
+                } label: {
+                    ZStack(alignment: .bottomTrailing) {
+                        Image(systemName: camera.whiteBalance.icon)
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundColor(camera.whiteBalance == .auto ? .white : .yellow)
+                        if camera.whiteBalance != .auto {
+                            Text(camera.whiteBalance.shortLabel)
+                                .font(.system(size: 7, weight: .bold))
+                                .foregroundColor(.black)
+                                .padding(.horizontal, 3).padding(.vertical, 1)
+                                .background(Color.yellow)
+                                .clipShape(Capsule())
+                                .offset(x: 12, y: 8)
+                        }
+                    }
+                    .frame(width: 38, height: 38)
+                }
+                // Manual/Auto exposure toggle
+                Button {
+                    camera.isManualExposure ? camera.disableManualExposure() : camera.enableManualExposure()
+                } label: {
+                    Text(camera.isManualExposure ? "M" : "A")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(camera.isManualExposure ? .black : .white)
+                        .frame(width: 28, height: 28)
+                        .background(camera.isManualExposure ? Color.yellow : Color.white.opacity(0.15))
+                        .clipShape(Circle())
+                }
             }
             .padding(.horizontal, 6).padding(.vertical, 4)
             .glassEffect(.clear)
 
             Spacer()
 
+            // Thermal warning — shown when the device is hot so the user knows grading is paused
+            if camera.thermalState == .serious || camera.thermalState == .critical {
+                HStack(spacing: 4) {
+                    Image(systemName: "thermometer.medium")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(camera.thermalState == .critical ? "Device Hot" : "Warming Up")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundColor(.red)
+                .fixedSize()
+                .padding(.horizontal, 9).padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().stroke(Color.red.opacity(0.40), lineWidth: 1))
+                .transition(.opacity.combined(with: .scale))
+            }
+
             // Center: trial badge - tap to open the paywall (timer lives in the recording HUD)
-            if !camera.isRecording, !trial.isPro {
+            if !camera.isRecording, !trial.isPro, camera.thermalState == .nominal || camera.thermalState == .fair {
                 Button {
                     showPaywall = true
                 } label: {
@@ -478,6 +574,7 @@ struct BottomBar: View {
     @ObservedObject var teleprompter: TeleprompterManager
     @Binding var showScriptEditor: Bool
     let onPrimaryAction: () -> Void
+    let onShowRecordings: () -> Void
 
     @State private var panel: BottomPanel = .none
 
@@ -490,6 +587,7 @@ struct BottomBar: View {
         withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) { panel = .none }
     }
 
+    /// A consistent circular control matching the landscape side strip.
     private func roundButton(icon: String, active: Bool = false, tint: Color = .white,
                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -506,7 +604,7 @@ struct BottomBar: View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 10) {
                 if camera.isRecording {
-                    AudioMeter(level: camera.audioLevel).transition(.opacity)
+                    AudioMeter(liveState: camera.liveState).transition(.opacity)
                 }
 
                 // Photo / Video picker + flip
@@ -575,7 +673,7 @@ struct BottomBar: View {
 
 struct ZoomPillView: View {
     @ObservedObject var camera: CameraManager
-    private let levels: [Double] = [1, 2, 3]
+    private var levels: [Double] { camera.minZoom < 0.9 ? [0.5, 1, 2, 3] : [1, 2, 3] }
 
     var body: some View {
         // All levels share one glass pill — active level highlighted via text color only.
@@ -583,7 +681,7 @@ struct ZoomPillView: View {
             ForEach(levels, id: \.self) { z in
                 let active = abs(camera.currentZoom - z) < 0.1
                 Button {
-                    withAnimation(.spring(response: 0.25)) { camera.setZoom(z) }
+                    camera.rampToZoom(z)   // smooth ramp instead of hard jump
                 } label: {
                     Text(active ? "\(zLabel(z))×" : zLabel(z))
                         .font(.system(size: active ? 15 : 13,
@@ -703,7 +801,7 @@ struct LandscapeControls: View {
             VStack(spacing: 8) {
                 Spacer()
                 if camera.isRecording {
-                    AudioMeter(level: camera.audioLevel).transition(.opacity)
+                    AudioMeter(liveState: camera.liveState).transition(.opacity)
                 }
                 ZoomPillView(camera: camera).padding(.bottom, 16)
             }
@@ -889,8 +987,10 @@ struct RecordButton: View {
     }
 }
 
+/// Recording timer display. Observes RecordingLiveState directly so only this view
+/// re-renders at 4Hz, not RecordingHUD or any parent.
 struct RecTimerView: View {
-    let duration: TimeInterval
+    @ObservedObject var liveState: RecordingLiveState
     var fileCount: Int = 1
     @State private var blink = true
 
@@ -917,7 +1017,8 @@ struct RecTimerView: View {
     }
 
     var formatted: String {
-        let h = Int(duration) / 3600, m = Int(duration) / 60 % 60, s = Int(duration) % 60
+        let d = liveState.duration
+        let h = Int(d) / 3600, m = Int(d) / 60 % 60, s = Int(d) % 60
         return h > 0 ? String(format: "%02d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
     }
 }
@@ -936,12 +1037,15 @@ struct FocusRing: View {
 
 /// Tap-to-focus reticle with a vertical brightness (exposure) slider, à la the iOS camera.
 /// Drag up to brighten, down to darken. Auto-hides 3s after the last interaction.
+/// When `onToggleLock` is provided a lock/unlock button appears below the reticle.
 struct FocusExposureView: View {
     let point: CGPoint
     @Binding var ev: Float
     let range: ClosedRange<Float>
     let onChange: (Float) -> Void
     let onInteract: () -> Void
+    var isLocked: Bool = false
+    var onToggleLock: (() -> Void)? = nil
 
     @State private var startEV: Float? = nil
     @State private var appeared = false
@@ -955,13 +1059,28 @@ struct FocusExposureView: View {
         let norm = CGFloat((ev - range.lowerBound) / span)
 
         ZStack {
-            // Focus square, centered on the tap point. Non-interactive so a tap anywhere
-            // (except the slider) falls through to the preview and re-triggers focus.
+            // Focus square — orange border when AF is locked
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(Color.yellow, lineWidth: 1.5)
+                .stroke(isLocked ? Color.orange : Color.yellow,
+                        lineWidth: isLocked ? 2.5 : 1.5)
                 .frame(width: box, height: box)
                 .scaleEffect(appeared ? 1 : 1.25)
                 .allowsHitTesting(false)
+
+            // AF lock / unlock button below the reticle
+            if let onToggleLock {
+                Button(action: {
+                    onToggleLock()
+                    onInteract()
+                }) {
+                    Image(systemName: isLocked ? "lock.fill" : "lock.open")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(isLocked ? .orange : .white.opacity(0.85))
+                        .frame(width: 28, height: 28)
+                        .background(Color.black.opacity(0.45), in: Circle())
+                }
+                .offset(y: box / 2 + 18)
+            }
 
             // Brightness slider to the right of the square - the only interactive part
             ZStack {
@@ -994,38 +1113,90 @@ struct FocusExposureView: View {
     }
 }
 
-/// Minimal overlay shown while recording: just the stop button and the timer.
-/// Everything else is hidden for a clean shot.
+/// Minimal overlay shown while recording: timer, pause, stop, and (optionally) teleprompter speed.
 struct RecordingHUD: View {
     @ObservedObject var camera: CameraManager
+    @ObservedObject var teleprompter: TeleprompterManager
     let isLandscape: Bool
     let onStop: () -> Void
 
     var body: some View {
         ZStack {
-            // Recording timer, top-center
-            VStack {
-                RecTimerView(duration: camera.recordingDuration, fileCount: camera.plannedFileCount)
+            // Recording timer + teleprompter speed (top-center)
+            VStack(spacing: 6) {
+                RecTimerView(liveState: camera.liveState, fileCount: camera.plannedFileCount)
                     .padding(.top, isLandscape ? 20 : 60)
+                // Teleprompter speed nudge — only when actively scrolling
+                if teleprompter.isEnabled {
+                    TeleprompterSpeedBadge(teleprompter: teleprompter)
+                }
                 Spacer()
             }
 
-            // Stop button - bottom-center (portrait) or right-center (landscape)
+            // Pause button — portrait: left of stop, landscape: above stop
             if isLandscape {
                 HStack {
                     Spacer()
-                    RecordButton(isRecording: true, action: onStop)
-                        .padding(.trailing, 50)
+                    VStack(spacing: 20) {
+                        pauseButton
+                        RecordButton(isRecording: true, action: onStop)
+                    }
+                    .padding(.trailing, 50)
                 }
             } else {
                 VStack {
                     Spacer()
-                    RecordButton(isRecording: true, action: onStop)
-                        .padding(.bottom, 48)
+                    HStack(spacing: 32) {
+                        pauseButton
+                        RecordButton(isRecording: true, action: onStop)
+                    }
+                    .padding(.bottom, 48)
                 }
             }
         }
         .buttonStyle(.plain)
+    }
+
+    private var pauseButton: some View {
+        Button {
+            camera.isPaused ? camera.resumeRecording() : camera.pauseRecording()
+        } label: {
+            Image(systemName: camera.isPaused ? "play.fill" : "pause.fill")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 54, height: 54)
+                .background(Color.white.opacity(0.18), in: Circle())
+                .overlay(Circle().stroke(Color.white.opacity(0.3), lineWidth: 1))
+        }
+    }
+}
+
+/// Compact speed control shown inside the recording HUD when the teleprompter is running.
+struct TeleprompterSpeedBadge: View {
+    @ObservedObject var teleprompter: TeleprompterManager
+    var body: some View {
+        HStack(spacing: 8) {
+            Button { teleprompter.adjustSpeed(-10) } label: {
+                Image(systemName: "tortoise.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.85))
+                    .frame(width: 30, height: 30)
+                    .background(Color.black.opacity(0.4), in: Circle())
+            }
+            Text("\(Int(teleprompter.speed))")
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundColor(.white)
+                .frame(width: 28)
+            Button { teleprompter.adjustSpeed(10) } label: {
+                Image(systemName: "hare.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.85))
+                    .frame(width: 30, height: 30)
+                    .background(Color.black.opacity(0.4), in: Circle())
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 5)
+        .background(Color.black.opacity(0.4), in: Capsule())
     }
 }
 
@@ -1105,6 +1276,39 @@ struct LandscapeTopBar: View {
                 }
                 .frame(width: 38, height: 38)
             }
+            // White balance cycle button
+            Button {
+                let all = WhiteBalancePreset.allCases
+                let idx = all.firstIndex(of: camera.whiteBalance) ?? 0
+                camera.setWhiteBalance(all[(idx + 1) % all.count])
+            } label: {
+                ZStack(alignment: .bottomTrailing) {
+                    Image(systemName: camera.whiteBalance.icon)
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(camera.whiteBalance == .auto ? .white : .yellow)
+                    if camera.whiteBalance != .auto {
+                        Text(camera.whiteBalance.shortLabel)
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundColor(.black)
+                            .padding(.horizontal, 3).padding(.vertical, 1)
+                            .background(Color.yellow)
+                            .clipShape(Capsule())
+                            .offset(x: 12, y: 8)
+                    }
+                }
+                .frame(width: 38, height: 38)
+            }
+            // Manual/Auto exposure toggle
+            Button {
+                camera.isManualExposure ? camera.disableManualExposure() : camera.enableManualExposure()
+            } label: {
+                Text(camera.isManualExposure ? "M" : "A")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(camera.isManualExposure ? .black : .white)
+                    .frame(width: 28, height: 28)
+                    .background(camera.isManualExposure ? Color.yellow : Color.white.opacity(0.15))
+                    .clipShape(Circle())
+            }
             ControlButton(icon: "rectangle.stack") { showRecordings = true }
             ControlButton(icon: "text.alignleft",
                           tint: teleprompter.isEnabled ? .orange : .white) {
@@ -1112,7 +1316,7 @@ struct LandscapeTopBar: View {
             }
             ControlButton(icon: "gearshape")       { showSettings   = true }
 
-            if !trial.isPro {
+            if !trial.isPro, camera.thermalState == .nominal || camera.thermalState == .fair {
                 Button {
                     showPaywall = true
                 } label: {
@@ -1126,6 +1330,21 @@ struct LandscapeTopBar: View {
                     .background(Color.orange.opacity(0.15))
                     .clipShape(Capsule())
                 }
+            }
+
+            if camera.thermalState == .serious || camera.thermalState == .critical {
+                HStack(spacing: 4) {
+                    Image(systemName: "thermometer.medium")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(camera.thermalState == .critical ? "Device Hot" : "Warming Up")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundColor(.red)
+                .fixedSize()
+                .padding(.horizontal, 9).padding(.vertical, 5)
+                .background(Color.red.opacity(0.15))
+                .clipShape(Capsule())
+                .transition(.opacity.combined(with: .scale))
             }
         }
         .padding(.horizontal, 10)
@@ -1155,8 +1374,9 @@ struct PiPModeChip: View {
 }
 
 /// Live microphone level meter shown while recording - confirms audio is being captured.
+/// Observes RecordingLiveState directly so only this view re-renders at 4Hz, not the whole BottomBar.
 struct AudioMeter: View {
-    let level: Float
+    @ObservedObject var liveState: RecordingLiveState
     private let count = 16
     var body: some View {
         HStack(spacing: 5) {
@@ -1167,17 +1387,60 @@ struct AudioMeter: View {
                 ForEach(0..<count, id: \.self) { i in
                     let t = Float(i) / Float(count)
                     RoundedRectangle(cornerRadius: 1)
-                        .fill(level > t ? barColor(t) : Color.white.opacity(0.15))
+                        .fill(liveState.audioLevel > t ? barColor(t) : Color.white.opacity(0.15))
                         .frame(width: 3, height: 11)
                 }
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
         .glassEffect(.clear)
-        .animation(.linear(duration: 0.06), value: level)
+        .animation(.linear(duration: 0.06), value: liveState.audioLevel)
     }
     private func barColor(_ t: Float) -> Color {
         if t > 0.85 { return .red } else if t > 0.6 { return .yellow } else { return .green }
+    }
+}
+
+// MARK: - Manual Exposure Panel
+
+/// Floating ISO + shutter speed sliders shown when manual exposure is active.
+struct ManualExposurePanel: View {
+    @ObservedObject var camera: CameraManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Label("ISO", systemImage: "camera.aperture")
+                    .font(.system(size: 11, weight: .semibold)).foregroundColor(.white.opacity(0.7))
+                    .frame(width: 48, alignment: .leading)
+                Slider(value: Binding(
+                    get: { camera.manualISO },
+                    set: { camera.manualISO = $0; camera.applyManualExposure() }
+                ), in: camera.isoRange)
+                .tint(.yellow)
+                Text("\(Int(camera.manualISO))")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white).frame(width: 36, alignment: .trailing)
+            }
+            HStack(spacing: 8) {
+                Label("1/", systemImage: "timer")
+                    .font(.system(size: 11, weight: .semibold)).foregroundColor(.white.opacity(0.7))
+                    .frame(width: 48, alignment: .leading)
+                Slider(value: Binding(
+                    get: { camera.manualShutterDenom },
+                    set: { camera.manualShutterDenom = $0; camera.applyManualExposure() }
+                ), in: camera.shutterRange)
+                .tint(.orange)
+                Text("\(Int(camera.manualShutterDenom))")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white).frame(width: 36, alignment: .trailing)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .stroke(Color.yellow.opacity(0.35), lineWidth: 1))
+        .padding(.horizontal, 16)
     }
 }
 
